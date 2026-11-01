@@ -47,7 +47,9 @@ CR_REG_METADATA(CQuadField, (
 CR_BIND(CQuadField::Quad, )
 CR_REG_METADATA_SUB(CQuadField, Quad, (
 	CR_MEMBER(units),
-	CR_IGNORED(teamUnits),
+	// saved rather than rebuilt from units: both are maintained with
+	// swap-erase, so the per-allyteam order cannot be reconstructed
+	CR_MEMBER(teamUnits),
 	CR_MEMBER(features),
 	CR_MEMBER(projectiles),
 	CR_MEMBER(repulsers),
@@ -63,11 +65,8 @@ void CQuadField::Quad::PostLoad()
 {
 	RECOIL_DETAILED_TRACY_ZONE;
 #ifndef UNIT_TEST
-	Resize(teamHandler.ActiveAllyTeams());
-
-	for (CUnit* unit: units) {
-		spring::VectorInsertUnique(teamUnits[unit->allyteam], unit, false);
-	}
+	// teamUnits is restored as saved
+	assert(teamUnits.size() == static_cast<size_t>(teamHandler.ActiveAllyTeams()));
 #endif
 }
 
