@@ -37,6 +37,7 @@
 #include "System/Net/UnpackPacket.h"
 #include "System/Sound/ISound.h"
 #include "System/Sync/DumpState.h"
+#include "Game/SimStateTestHooks.h"
 #include "System/Sync/DumpHistory.h"
 
 #include "System/Misc/TracyDefs.h"
@@ -628,6 +629,7 @@ void CGame::ClientReadNet()
 				// Spring.GetPrevFrameSyncChecksum(). Must run before the
 				// 4096-frame reset below so we capture the pre-reset value.
 				CSyncChecker::SetPrevChecksum(CSyncChecker::GetChecksum());
+				SimStateTestHooks::PostSimFrame(gs->frameNum, CSyncChecker::GetChecksum());
 
 				// buffer all checksums, so we can check sync later between demo & local
 				if (haveServerDemo)

@@ -124,6 +124,7 @@
 #include "System/FileSystem/FileSystem.h"
 #include "System/LoadSave/LoadSaveHandler.h"
 #include "System/LoadSave/DemoRecorder.h"
+#include "Game/SimStateTestHooks.h"
 #include "System/Log/ILog.h"
 #include "System/Platform/Misc.h"
 #include "System/Platform/Watchdog.h"
@@ -291,6 +292,7 @@ CGame::~CGame()
 	ENTER_SYNCED_CODE();
 	LOG("[Game::%s][1]", __func__);
 
+	SimStateTestHooks::Kill();
 	RmlGui::Shutdown();
 	helper->Kill();
 	KillLua(true);
@@ -362,6 +364,7 @@ void CGame::Load(const std::string& mapFileName)
 	Watchdog::RegisterThread(WDT_LOAD);
 
 	ZoneScoped;
+	SimStateTestHooks::Init();
 
 	std::vector<std::string> contentErrors;
 
@@ -492,6 +495,10 @@ void CGame::Load(const std::string& mapFileName)
 				Watchdog::ClearTimer(WDT_LOAD);
 				pathManager->PostFinalizeRefresh();
 				Watchdog::ClearTimer(WDT_LOAD);
+
+				if (saveFileHandler != nullptr)
+					SimStateTestHooks::PostLoadGame(gs->frameNum);
+
 				LEAVE_SYNCED_CODE();
 			}
 
@@ -881,7 +888,7 @@ void CGame::LoadLua(bool dryRun, bool onlyUnsynced)
 
 	LEAVE_SYNCED_CODE();
 
-	if (!dryRun) {
+	if (!dryRun && !SimStateTestHooks::IsLuaUIDisabled()) {
 		loadscreen->SetLoadMessage("Loading LuaUI");
 		auto lock = CLoadLock::GetUniqueLock();
 		CLuaUI::LoadFreeHandler();

@@ -42,6 +42,7 @@ make_global_var(sources_engine_Game
 		"${CMAKE_CURRENT_SOURCE_DIR}/Players/TeamController.cpp"
 		"${CMAKE_CURRENT_SOURCE_DIR}/PreGame.cpp"
 		"${CMAKE_CURRENT_SOURCE_DIR}/SelectedUnitsHandler.cpp"
+		"${CMAKE_CURRENT_SOURCE_DIR}/SimStateTestHooks.cpp"
 		"${CMAKE_CURRENT_SOURCE_DIR}/SelectedUnitsAI.cpp"
 		"${CMAKE_CURRENT_SOURCE_DIR}/SyncedGameCommands.cpp"
 		"${CMAKE_CURRENT_SOURCE_DIR}/TraceRay.cpp"
