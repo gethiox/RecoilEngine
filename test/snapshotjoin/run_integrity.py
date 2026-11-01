@@ -108,6 +108,8 @@ def main():
 	ap.add_argument("--no-repro-check", action="store_true", help="skip the second reference run")
 	ap.add_argument("--reuse-reference", action="store_true", help="reuse an existing reference run in work-dir")
 	ap.add_argument("--dump", action="store_true", help="on divergence, rerun with DumpState around the diverging frame")
+	ap.add_argument("--compare-state", action="store_true",
+		help="write the full state at the save frame in the saver and right after loading, and compare them member by member")
 	ap.add_argument("--speed", type=float, default=1000.0, help="requested game speed (capped by the script's MaxSpeed)")
 	ap.add_argument("--timeout", type=int, default=3600)
 	args = ap.parse_args()
@@ -146,9 +148,11 @@ def main():
 		run_engine(args, "ref2", script, checksum_cfg("ref2"))
 		results.append(compare("ref", ref, "ref2", read_checksums(os.path.join(args.work_dir, "ref2.log")), 0, args.end_frame))
 
-	save_dir, _ = run_engine(args, "save", script, checksum_cfg("save", {
+	compare_cfg = {"SimStateTestCompareFrame": args.save_frame} if args.compare_state else {}
+
+	save_dir, _ = run_engine(args, "save", script, checksum_cfg("save", dict(compare_cfg, **{
 		"SimStateTestSaveFrame": args.save_frame,
-		"SimStateTestSaveName": "snap"}))
+		"SimStateTestSaveName": "snap"})))
 	results.append(compare("ref", ref, "save", read_checksums(os.path.join(args.work_dir, "save.log")), 0, args.end_frame))
 
 	save_file = os.path.join(save_dir, "Saves", "snap.ssf")
@@ -158,7 +162,13 @@ def main():
 		return 2
 	log("save size: %.1f MB" % (os.path.getsize(save_file) / 1e6))
 
-	load_dir, _ = run_engine(args, "load", save_file, checksum_cfg("load"))
+	load_dir, _ = run_engine(args, "load", save_file, checksum_cfg("load", compare_cfg))
+
+	if args.compare_state:
+		base = "compare-%d" % args.save_frame
+		rc = subprocess.run([sys.executable, os.path.join(HERE, "compare_states.py"),
+		                     os.path.join(save_dir, base), os.path.join(load_dir, base)]).returncode
+		results.append((rc == 0, "saved state vs state right after loading: %s" % ("identical" if rc == 0 else "DIFFERENT (see above)")))
 	load = read_checksums(os.path.join(args.work_dir, "load.log"))
 	ok_load, msg_load = compare("ref", ref, "load", load, args.save_frame + 1, args.end_frame)
 	results.append((ok_load, msg_load))

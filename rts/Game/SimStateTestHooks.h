@@ -19,6 +19,9 @@
  *  - SimStateTestSaveName:    name of that save (written to Saves/<name>.ssf)
  *  - SimStateTestQuitFrame:   quit right after this frame was simulated
  *  - SimStateTestDumpFrames:  "<first> <last> <period>", DumpState() range
+ *  - SimStateTestCompareFrame: write the full uncompressed state (plus a
+ *    member layout map) after this frame, or right after loading a game
+ *    saved at this frame, to compare-<frame>.state/.layout
  *  - SimStateTestGameSpeed:   request this user speed once the sim runs
  *    (requires a matching MaxSpeed modoption in the start script)
  *  - SimStateTestDisableLuaUI: do not load LuaUI (its widgets issue orders at

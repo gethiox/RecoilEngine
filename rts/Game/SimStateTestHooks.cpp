@@ -6,9 +6,13 @@
 #include <string>
 
 #include "Game/GlobalUnsynced.h"
+#include "Game/SimStateLuaDump.h"
+#include "Lua/LuaGaia.h"
+#include "Lua/LuaRules.h"
 #include "Net/Protocol/BaseNetProtocol.h"
 #include "Net/Protocol/NetProtocol.h"
 #include "System/Config/ConfigHandler.h"
+#include "System/LoadSave/CregLoadSaveHandler.h"
 #include "System/LoadSave/LoadSaveHandler.h"
 #include "System/Log/ILog.h"
 #include "System/FileSystem/SimpleParser.h"
@@ -19,6 +23,7 @@ CONFIG(std::string, SimStateTestChecksumLog).defaultValue("").description("[test
 CONFIG(int, SimStateTestSaveFrame).defaultValue(-1).description("[test] save the game right after this frame");
 CONFIG(std::string, SimStateTestSaveName).defaultValue("simstatetest").description("[test] save name used with SimStateTestSaveFrame");
 CONFIG(int, SimStateTestQuitFrame).defaultValue(-1).description("[test] quit right after this frame");
+CONFIG(int, SimStateTestCompareFrame).defaultValue(-1).description("[test] write the full game state for comparison after this frame");
 CONFIG(float, SimStateTestGameSpeed).defaultValue(0.0f).description("[test] request this game speed once the simulation runs");
 CONFIG(bool, SimStateTestDisableLuaUI).defaultValue(false).description("[test] do not load LuaUI");
 CONFIG(std::string, SimStateTestDumpFrames).defaultValue("").description("[test] \"first last period\" frames passed to DumpState");
@@ -29,6 +34,21 @@ namespace {
 	int quitFrame = -1;
 	float gameSpeed = 0.0f;
 	bool dumpState = false;
+	int compareFrame = -1;
+
+	void WriteCompareState(int frameNum)
+	{
+		const std::string basePath = "compare-" + IntToString(frameNum);
+
+		if (CCregLoadSaveHandler::WriteStateForComparison(basePath))
+			LOG("[SimStateTestHooks] wrote comparison state %s", basePath.c_str());
+
+		// human readable view of the synced Lua heaps (after the full GC done above)
+		if (luaRules != nullptr)
+			SimStateLuaDump::DumpHeap(luaRules->syncedLuaHandle.GetLuaState(), basePath + ".luarules.txt");
+		if (luaGaia != nullptr)
+			SimStateLuaDump::DumpHeap(luaGaia->syncedLuaHandle.GetLuaState(), basePath + ".luagaia.txt");
+	}
 	std::string saveName;
 }
 
@@ -41,6 +61,7 @@ void SimStateTestHooks::Init()
 	quitFrame = configHandler->GetInt("SimStateTestQuitFrame");
 	saveName = configHandler->GetString("SimStateTestSaveName");
 	gameSpeed = configHandler->GetFloat("SimStateTestGameSpeed");
+	compareFrame = configHandler->GetInt("SimStateTestCompareFrame");
 
 	if (!logPath.empty()) {
 		if ((checksumLog = fopen(logPath.c_str(), "w")) == nullptr)
@@ -74,6 +95,9 @@ void SimStateTestHooks::PostLoadGame(int frameNum)
 	// the reference state recorded at the end of the same frame
 	if (dumpState)
 		DumpState(-1, -1, -1, std::nullopt, std::nullopt, true);
+
+	if (frameNum == compareFrame)
+		WriteCompareState(frameNum);
 }
 
 void SimStateTestHooks::PostSimFrame(int frameNum, uint32_t syncChecksum)
@@ -93,6 +117,10 @@ void SimStateTestHooks::PostSimFrame(int frameNum, uint32_t syncChecksum)
 	// DumpState() itself only runs from SimFrame with cheats enabled
 	if (dumpState)
 		DumpState(-1, -1, -1, std::nullopt, std::nullopt, true);
+
+	// before saving, so both see the same (garbage-collected) Lua state
+	if (frameNum == compareFrame)
+		WriteCompareState(frameNum);
 
 	if (frameNum == saveFrame) {
 		LOG("[SimStateTestHooks] saving game at frame %d", frameNum);

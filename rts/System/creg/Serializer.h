@@ -8,6 +8,7 @@
 
 #ifdef USING_CREG
 
+#include <cstdint>
 #include <map>
 #include <vector>
 #include <deque>
@@ -97,7 +98,26 @@ namespace creg {
 		void SerializeObject(Class* c, void* ptr, ObjectRef* objr);
 
 	public:
+		/// byte range written by one class member (or custom serializer)
+		struct LayoutEntry {
+			uint64_t start;
+			uint64_t end;
+			const char* className;
+			const char* memberName; // "<Serialize>" for CR_SERIALIZER output
+		};
+
+	protected:
+		std::vector<LayoutEntry>* layout = nullptr;
+
+	public:
 		COutputStreamSerializer();
+
+		/**
+		 * Optionally record which class member produced which bytes of the
+		 * stream; used by tests to attribute differences between two saved
+		 * states to the responsible member. The vector must outlive SavePackage.
+		 */
+		void SetLayoutRecorder(std::vector<LayoutEntry>* recorder) { layout = recorder; }
 
 		/** Create a package of the given root object and all the objects that it references
 		 * @param s stream to serialize the data to

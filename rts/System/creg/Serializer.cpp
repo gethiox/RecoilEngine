@@ -176,6 +176,9 @@ void COutputStreamSerializer::SerializeObject(Class* c, void* ptr, ObjectRef* ob
 		omg.members.push_back(om);
 		omg.size += om.size;
 		LOG_SL(LOG_SECTION_CREG_SERIALIZER, L_DEBUG, "Serialized %s::%s type:%s size:%d", c->name, m->name, m->type->GetName().c_str(), om.size);
+
+		if (layout != nullptr)
+			layout->push_back({mstart, mend, c->name, m->name});
 	}
 
 
@@ -187,6 +190,9 @@ void COutputStreamSerializer::SerializeObject(Class* c, void* ptr, ObjectRef* ob
 		c->CallSerializeProc(ptr, this);
 		unsigned mend = stream->tellp();
 		om.size = mend - mstart;
+
+		if (layout != nullptr)
+			layout->push_back({mstart, mend, c->name, "<Serialize>"});
 		omg.members.push_back(om);
 		omg.size += om.size;
 	}

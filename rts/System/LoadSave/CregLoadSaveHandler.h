@@ -18,6 +18,13 @@ public:
 	void LoadAIData() override;
 	void SaveGame(const std::string& path) override;
 
+	/**
+	 * Test support: write the uncompressed game state plus a map of which
+	 * class member produced which bytes to <basePath>.state / .layout, so
+	 * two states can be compared member by member.
+	 */
+	static bool WriteStateForComparison(const std::string& basePath);
+
 protected:
 	std::stringstream iss;
 };
