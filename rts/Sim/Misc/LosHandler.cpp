@@ -8,6 +8,7 @@
 #include "Sim/Misc/TeamHandler.h"
 #include "Sim/Misc/ModInfo.h"
 #include "Map/ReadMap.h"
+#include "System/Exceptions.h"
 #include "System/Log/ILog.h"
 #include "System/SpringHash.h"
 #include "System/creg/STL_Deque.h"
@@ -24,7 +25,8 @@
 
 CR_BIND(CLosHandler, )
 
-// ILosTypes aren't creg'ed cause they repopulate themselves in case of loading a saved game
+// ILosTypes are serialized manually (see CLosHandler::Serialize) since they
+// consist of instances shared between units and queues referencing them
 CR_REG_METADATA(CLosHandler,(
 	CR_IGNORED(autoLinkEvents),
 	CR_IGNORED(autoLinkedEvents),
@@ -43,7 +45,10 @@ CR_REG_METADATA(CLosHandler,(
 	CR_MEMBER(baseRadarErrorSize),
 	CR_MEMBER(baseRadarErrorMult),
 	CR_MEMBER(radarErrorSizes),
-	CR_IGNORED(losTypes)
+	CR_IGNORED(losTypes),
+	CR_IGNORED(loadedUnitInstances),
+	CR_SERIALIZER(Serialize),
+	CR_POSTLOAD(PostLoad)
 ))
 
 
@@ -1014,4 +1019,226 @@ bool CLosHandler::InSonarJammer(const CUnit* unit, int allyTeam) const
 	const int jammerAlly = modInfo.separateJammers ? unit->allyteam : 0;
 
 	return sonarJammer.InSight(unit->pos, jammerAlly);
+}
+
+
+
+//////////////////////////////////////////////////////////////////////
+// Serialization
+//////////////////////////////////////////////////////////////////////
+
+namespace {
+	template<typename T> void SerializeValue(creg::ISerializer* s, T& v)
+	{
+		static_assert(std::is_trivially_copyable_v<T>);
+		s->Serialize(&v, sizeof(T));
+	}
+
+	template<typename T> void SerializePodVector(creg::ISerializer* s, std::vector<T>& vec)
+	{
+		static_assert(std::is_trivially_copyable_v<T>);
+		uint32_t size = vec.size();
+		SerializeValue(s, size);
+
+		if (!s->IsWriting())
+			vec.resize(size);
+
+		s->Serialize(vec.data(), size * sizeof(T));
+	}
+
+	template<typename C, typename ToID, typename FromID>
+	void SerializeInstanceRefs(creg::ISerializer* s, C& cont, ToID toID, FromID fromID)
+	{
+		uint32_t size = cont.size();
+		SerializeValue(s, size);
+
+		if (s->IsWriting()) {
+			for (auto& e: cont) {
+				auto ref = toID(e);
+				SerializeValue(s, ref);
+			}
+			return;
+		}
+
+		cont.clear();
+		for (uint32_t i = 0; i < size; i++) {
+			decltype(toID(*cont.begin())) ref;
+			SerializeValue(s, ref);
+			cont.push_back(fromID(ref));
+		}
+	}
+}
+
+void ILosType::Serialize(creg::ISerializer* s)
+{
+	RECOIL_DETAILED_TRACY_ZONE;
+
+	// LOS maps: per ally-team reference counts
+	uint32_t numLosMaps = losMaps.size();
+	SerializeValue(s, numLosMaps);
+
+	if (numLosMaps != losMaps.size())
+		throw content_error("[ILosType::Serialize] ally-team count mismatch");
+
+	for (CLosMap& losMap: losMaps) {
+		auto& rawMap = losMap.GetLosMapForSerialization();
+		const size_t mapSize = rawMap.size();
+		SerializePodVector(s, rawMap);
+
+		if (rawMap.size() != mapSize)
+			throw content_error("[ILosType::Serialize] LOS map size mismatch");
+	}
+
+	// instances; ids are equal to their index in the deque
+	uint32_t numInstances = instances.size();
+	SerializeValue(s, numInstances);
+
+	if (!s->IsWriting()) {
+		instances.clear();
+
+		for (uint32_t i = 0; i < numInstances; i++)
+			instances.emplace_back(i);
+	}
+
+	for (SLosInstance& li: instances) {
+		SerializeValue(s, li.id);
+		SerializeValue(s, li.allyteam);
+		SerializeValue(s, li.radius);
+		SerializeValue(s, li.basePos);
+		SerializeValue(s, li.baseHeight);
+		SerializeValue(s, li.refCount);
+		SerializePodVector(s, li.squares);
+		SerializeValue(s, li.hashNum);
+		SerializeValue(s, li.status);
+		SerializeValue(s, li.isCached);
+		SerializeValue(s, li.isQueuedForUpdate);
+		SerializeValue(s, li.isQueuedForTerraform);
+	}
+
+	SerializePodVector(s, freeIDs);
+
+	const auto ToID = [](const SLosInstance* li) -> int { return li->id; };
+	const auto FromID = [this](int id) -> SLosInstance* {
+		if (id < 0 || id >= static_cast<int>(instances.size()))
+			throw content_error("[ILosType::Serialize] invalid LOS instance reference");
+		return &instances[id];
+	};
+
+	// hash buckets; the order inside each bucket decides which instance gets
+	// shared first, so it is preserved
+	uint32_t numBuckets = instanceHashes.size();
+	SerializeValue(s, numBuckets);
+
+	if (s->IsWriting()) {
+		// write buckets ordered by key so the output does not depend on the
+		// hash map's internal layout
+		std::vector<int> keys;
+		keys.reserve(numBuckets);
+
+		for (const auto& p: instanceHashes)
+			keys.push_back(p.first);
+
+		std::sort(keys.begin(), keys.end());
+
+		for (int key: keys) {
+			SerializeValue(s, key);
+			SerializeInstanceRefs(s, instanceHashes[key], ToID, FromID);
+		}
+	} else {
+		spring::clear_unordered_map(instanceHashes);
+
+		for (uint32_t i = 0; i < numBuckets; i++) {
+			int key = 0;
+			SerializeValue(s, key);
+			SerializeInstanceRefs(s, instanceHashes[key], ToID, FromID);
+		}
+	}
+
+	const auto DelayedToID = [](const DelayedInstance& di) -> int2 { return {di.instance->id, di.timeoutTime}; };
+	const auto DelayedFromID = [&](int2 v) -> DelayedInstance { return {FromID(v.x), v.y}; };
+
+	SerializeInstanceRefs(s, delayedDeleteQue, DelayedToID, DelayedFromID);
+	SerializeInstanceRefs(s, delayedTerraQue, DelayedToID, DelayedFromID);
+	SerializeInstanceRefs(s, losUpdate, ToID, FromID);
+	SerializeInstanceRefs(s, losCache, ToID, FromID);
+	SerializeInstanceRefs(s, losRemove, ToID, FromID);
+	SerializeInstanceRefs(s, losAdd, ToID, FromID);
+	SerializeInstanceRefs(s, losDeleted, ToID, FromID);
+	SerializeInstanceRefs(s, losRecalc, ToID, FromID);
+}
+
+
+void CLosHandler::Serialize(creg::ISerializer* s)
+{
+	RECOIL_DETAILED_TRACY_ZONE;
+
+	for (ILosType* lt: losTypes)
+		lt->Serialize(s);
+
+	// links from units to their (possibly shared) instances
+	uint32_t numUnits = 0;
+
+	if (s->IsWriting()) {
+		std::vector<std::pair<int, std::array<int, 7>>> unitInstances;
+
+		for (unsigned int unitID = 0; unitID < unitHandler.MaxUnits(); unitID++) {
+			const CUnit* unit = unitHandler.GetUnit(unitID);
+
+			if (unit == nullptr)
+				continue;
+
+			std::array<int, 7> ids;
+
+			for (size_t t = 0; t < ids.size(); t++)
+				ids[t] = (unit->los[t] != nullptr) ? unit->los[t]->id : -1;
+
+			unitInstances.emplace_back(unitID, ids);
+		}
+
+		numUnits = unitInstances.size();
+		SerializeValue(s, numUnits);
+
+		for (auto& p: unitInstances) {
+			SerializeValue(s, p.first);
+			SerializeValue(s, p.second);
+		}
+
+		return;
+	}
+
+	SerializeValue(s, numUnits);
+	loadedUnitInstances.resize(numUnits);
+
+	for (auto& p: loadedUnitInstances) {
+		SerializeValue(s, p.first);
+		SerializeValue(s, p.second);
+	}
+}
+
+void CLosHandler::PostLoad()
+{
+	RECOIL_DETAILED_TRACY_ZONE;
+
+	for (const auto& [unitID, ids]: loadedUnitInstances) {
+		CUnit* unit = unitHandler.GetUnit(unitID);
+
+		if (unit == nullptr)
+			throw content_error("[CLosHandler::PostLoad] LOS instance owned by missing unit");
+
+		for (size_t t = 0; t < ids.size(); t++) {
+			if (ids[t] < 0) {
+				unit->los[t] = nullptr;
+				continue;
+			}
+
+			ILosType* lt = losTypes[t];
+
+			if (ids[t] >= static_cast<int>(lt->instances.size()))
+				throw content_error("[CLosHandler::PostLoad] invalid LOS instance reference");
+
+			unit->los[t] = &lt->instances[ids[t]];
+		}
+	}
+
+	loadedUnitInstances.clear();
 }
