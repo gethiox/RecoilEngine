@@ -85,8 +85,8 @@ static spring::unsynced_map<lua_CFunction, std::string> funcToName;
  * Converted from lobject.h
  */
 
-#define creg_CommonHeader creg_GCObject* next; lu_byte tt; lu_byte marked
-#define CR_COMMON_HEADER() CR_MEMBER(next), CR_MEMBER(tt), CR_MEMBER(marked)
+#define creg_CommonHeader creg_GCObject* next; lu_byte tt; lu_byte marked; lu_int32 hashid
+#define CR_COMMON_HEADER() CR_MEMBER(next), CR_MEMBER(tt), CR_MEMBER(marked), CR_MEMBER(hashid)
 
 union creg_Value{
 	creg_GCObject *gc;
@@ -331,6 +331,7 @@ struct creg_global_State {
 	creg_TString *tmname[TM_N];  /* array with tag-method names */
 
 	//SPRING additions
+	lu_int32 nexthashid;
 	lua_Func_fopen  fopen_func;
 	lua_Func_popen  popen_func;
 	lua_Func_pclose pclose_func;
@@ -604,6 +605,7 @@ CR_REG_METADATA(creg_global_State, (
 	CR_MEMBER(uvhead),
 	CR_MEMBER(mt),
 	CR_MEMBER(tmname),
+	CR_MEMBER(nexthashid),
 	CR_IGNORED(fopen_func),
 	CR_IGNORED(popen_func),
 	CR_IGNORED(pclose_func),
@@ -788,12 +790,12 @@ void creg_Table::PostLoad()
 	// table may contain pointers as keys so will require reordering
 	int sizenode = twoto(lsizenode);
 
+	// tables, functions, userdata and threads are hashed by their (restored)
+	// hashid, so only light userdata keys still depend on memory addresses
 	bool reorder = false;
 	for (int i = 0; i < sizenode; ++i) {
 		int tt = node[i].i_key.nk.tt;
-		if (tt != LUA_TNIL && tt != LUA_TBOOLEAN &&
-		    tt != LUA_TNUMBER && tt != LUA_TSTRING &&
-		    tt != LUA_TDEADKEY) {
+		if (tt == LUA_TLIGHTUSERDATA) {
 			reorder = true;
 			break;
 		}
@@ -801,17 +803,12 @@ void creg_Table::PostLoad()
 	if (!reorder)
 		return;
 
+	// Keys hashed by address moved, so the hash part has to be rebuilt. Keep
+	// its size: unlike the slot order of address-hashed keys (which differs
+	// between clients anyway) the size is deterministic, and it decides when
+	// the table gets rehashed next.
 	lua_State* L = luaContext.GetMainthread();
-	// see ltable.cpp
-	lsizenode = 0;
-	creg_Node* onode = node;
-	node = GetDummyNode();
-	lastfree = node;
-	for (int i = 0; i < sizenode; ++i) {
-		if (onode[i].i_val.tt != LUA_TNIL)
-			setobjt2t(L, luaH_set(L, (Table*) this, (TValue*) &(onode[i].i_key.tvk)), (TValue*) &(onode[i].i_val));
-	}
-	luaContext.Getfrealloc()(luaContext.GetContext(), onode, sizenode * sizeof(Node), 0);
+	luaH_resizearray(L, (Table*) this, sizearray);
 }
 
 
@@ -854,6 +851,7 @@ void creg_TString::Serialize(creg::ISerializer* s)
 	if (!s->IsWriting()) {
 		((char *)(this+1))[u.tsv.len] = '\0';
 		u.tsv.hash = lua_calchash(getstr(this), u.tsv.len);
+		u.tsv.hashid = 0; // strings are hashed by content
 	}
 }
 
@@ -917,6 +915,7 @@ void creg_Udata::Serialize(creg::ISerializer* s)
 	SerializePtr(s, &u.uv.next);
 	s->SerializeInt(&u.uv.tt, sizeof(u.uv.tt));
 	s->SerializeInt(&u.uv.marked, sizeof(u.uv.marked));
+	s->SerializeInt(&u.uv.hashid, sizeof(u.uv.hashid));
 	SerializePtr(s, &u.uv.metatable);
 	SerializePtr(s, &u.uv.env);
 	s->SerializeInt(&u.uv.len, sizeof(u.uv.len));

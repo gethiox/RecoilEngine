@@ -109,7 +109,8 @@ static Node *mainposition (const Table *t, const TValue *key) {
     case LUA_TLIGHTUSERDATA:
       return hashpointer(t, pvalue(key));
     default:
-      return hashpointer(t, gcvalue(key));
+      /* SPRING: address independent, see CommonHeader */
+      return hashmod(t, gcvalue(key)->gch.hashid);
   }
 }
 
