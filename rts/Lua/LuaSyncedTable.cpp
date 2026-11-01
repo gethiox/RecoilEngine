@@ -15,6 +15,33 @@ static int SyncTableMetatable(lua_State* L);
 
 /******************************************************************************/
 
+/*
+ * Pushes the key on top of dstL (unsynced) onto srcL (synced). Primitive keys
+ * are pushed directly: LuaUtils::CopyData would cache them via references in
+ * the synced registry, i.e. reading SYNCED.x from unsynced code would modify
+ * synced state (the registry's free-list) at client specific times.
+ */
+static void PushKeyToSyncedState(lua_State* srcL, lua_State* dstL)
+{
+	switch (lua_type(dstL, -1)) {
+		case LUA_TSTRING: {
+			size_t len = 0;
+			const char* str = lua_tolstring(dstL, -1, &len);
+			lua_pushlstring(srcL, str, len);
+		} break;
+		case LUA_TNUMBER: {
+			lua_pushnumber(srcL, lua_tonumber(dstL, -1));
+		} break;
+		case LUA_TBOOLEAN: {
+			lua_pushboolean(srcL, lua_toboolean(dstL, -1));
+		} break;
+		default: {
+			const int keyCopied = LuaUtils::CopyData(srcL, dstL, 1);
+			assert(keyCopied > 0);
+		} break;
+	}
+}
+
 static int SyncTableIndex(lua_State* dstL)
 {
 	if (lua_isnoneornil(dstL, -1))
@@ -30,8 +57,7 @@ static int SyncTableIndex(lua_State* dstL)
 
 	// copy the index & get value
 	lua_pushvalue(srcL, LUA_GLOBALSINDEX);
-	const int keyCopied = LuaUtils::CopyData(srcL, dstL, 1);
-	assert(keyCopied > 0);
+	PushKeyToSyncedState(srcL, dstL);
 	lua_rawget(srcL, -2);
 
 	// copy to destination
