@@ -1,6 +1,9 @@
 /* This file is part of the Spring engine (GPL v2 or later), see LICENSE.html */
 #include "DamageArray.h"
 #include "DamageArrayHandler.h"
+#include "Sim/Weapons/WeaponDef.h"
+#include "Sim/Weapons/WeaponDefHandler.h"
+#include "System/Exceptions.h"
 
 #include "System/float3.h"
 
@@ -40,6 +43,7 @@ CR_REG_METADATA(DynDamageArray, (
 	CR_MEMBER(explosionSpeed),
 	CR_MEMBER(refCount),
 	CR_MEMBER(fromDef),
+	CR_MEMBER(defID),
 
 	CR_POSTLOAD(PostLoad)
 ))
@@ -77,6 +81,32 @@ void DynDamageArray::PostLoad()
 		fromDef = false;
 	}
 	assert(refCount > 0);
+}
+
+void DynDamageArray::SerializeRef(creg::ISerializer* s, const DynDamageArray*& dda)
+{
+	RECOIL_DETAILED_TRACY_ZONE;
+	int32_t defID = -1;
+
+	if (s->IsWriting() && dda != nullptr && dda->fromDef)
+		defID = dda->defID;
+
+	s->SerializeInt(&defID, sizeof(defID));
+
+	if (defID < 0) {
+		s->SerializeObjectPtr((void**) &dda, DynDamageArray::StaticClass());
+		return;
+	}
+
+	if (s->IsWriting())
+		return;
+
+	const WeaponDef* wd = weaponDefHandler->GetWeaponDefByID(defID);
+
+	if (wd == nullptr || !wd->damages.fromDef)
+		throw content_error("[DynDamageArray::SerializeRef] invalid weapon def reference");
+
+	dda = IncRef(&wd->damages);
 }
 
 DamageArray DynDamageArray::GetDynamicDamages(const float3& startPos, const float3& curPos) const

@@ -41,7 +41,7 @@ CR_REG_METADATA(CWeapon, (
 	CR_MEMBER(owner),
 	CR_MEMBER(slavedTo),
 	CR_MEMBER(weaponDef),
-	CR_MEMBER(damages),
+	CR_IGNORED(damages), // see Serialize
 
 	CR_MEMBER(aimFromPiece),
 	CR_MEMBER(muzzlePiece),
@@ -115,8 +115,15 @@ CR_REG_METADATA(CWeapon, (
 	CR_MEMBER(fastAutoRetargeting),
 	CR_MEMBER(fastQueryPointUpdate),
 	CR_MEMBER(accurateLeading),
-	CR_MEMBER(burstControlWhenOutOfArc)
+	CR_MEMBER(burstControlWhenOutOfArc),
+
+	CR_SERIALIZER(Serialize)
 ))
+
+void CWeapon::Serialize(creg::ISerializer* s)
+{
+	DynDamageArray::SerializeRef(s, damages);
+}
 
 
 

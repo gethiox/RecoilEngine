@@ -32,6 +32,7 @@ public:
 	CWeapon(CUnit* owner = nullptr, const WeaponDef* def = nullptr);
 	virtual ~CWeapon();
 	virtual void Init();
+	void Serialize(creg::ISerializer* s);
 
 	void SetWeaponNum(int num) { weaponNum = num; }
 	void DependentDied(CObject* o) override;

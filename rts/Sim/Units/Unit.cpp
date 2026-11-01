@@ -2834,8 +2834,8 @@ CR_REG_METADATA(CUnit, (
 	CR_MEMBER(unitDef),
 	CR_MEMBER(shieldWeapon),
 	CR_MEMBER(stockpileWeapon),
-	CR_MEMBER(selfdExpDamages),
-	CR_MEMBER(deathExpDamages),
+	CR_IGNORED(selfdExpDamages), // see Serialize
+	CR_IGNORED(deathExpDamages), // see Serialize
 
 	CR_MEMBER(featureDefID),
 
@@ -3017,8 +3017,15 @@ CR_REG_METADATA(CUnit, (
 
 //	CR_MEMBER(empDecline),
 
+	CR_SERIALIZER(Serialize),
 	CR_POSTLOAD(PostLoad)
 ))
+
+void CUnit::Serialize(creg::ISerializer* s)
+{
+	DynDamageArray::SerializeRef(s, selfdExpDamages);
+	DynDamageArray::SerializeRef(s, deathExpDamages);
+}
 
 CR_BIND(CUnit::TransportedUnit,)
 

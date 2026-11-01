@@ -29,7 +29,7 @@ CR_BIND_DERIVED_INTERFACE(CWeaponProjectile, CProjectile)
 
 CR_REG_METADATA(CWeaponProjectile,(
 	CR_SETFLAG(CF_Synced),
-	CR_MEMBER(damages),
+	CR_IGNORED(damages), // see Serialize
 	CR_MEMBER(targeted),
 	CR_MEMBER(bounced),
 	CR_MEMBER(weaponDef),
@@ -42,8 +42,14 @@ CR_REG_METADATA(CWeaponProjectile,(
 	CR_MEMBER(bounces),
 	CR_MEMBER(weaponNum),
 
+	CR_SERIALIZER(Serialize),
 	CR_POSTLOAD(PostLoad)
 ))
+
+void CWeaponProjectile::Serialize(creg::ISerializer* s)
+{
+	DynDamageArray::SerializeRef(s, damages);
+}
 
 
 CWeaponProjectile::CWeaponProjectile(const ProjectileParams& params)
