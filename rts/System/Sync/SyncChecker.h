@@ -31,6 +31,8 @@ class CSyncChecker {
 		 * Keeps a running checksum over all assignments to synced variables.
 		 */
 		static unsigned GetChecksum() { return g_checksum; }
+		/// only for restoring a previously captured checksum (e.g. when loading a game state)
+		static void SetChecksum(unsigned v) { g_checksum = v; }
 		static unsigned GetPrevChecksum() { return g_prevChecksum; }
 		static void SetPrevChecksum(unsigned v) { g_prevChecksum = v; }
 		static void NewFrame();

@@ -31,6 +31,7 @@
 #include "Sim/Misc/CategoryHandler.h"
 #include "Sim/MoveTypes/MoveDefHandler.h"
 #include "Sim/Misc/TeamHandler.h"
+#include "Sim/Misc/GlobalSynced.h"
 #include "Sim/Misc/Wind.h"
 #include "Sim/Misc/YardmapStatusEffectsMap.h"
 #include "Sim/Projectiles/ProjectileHandler.h"
@@ -48,6 +49,7 @@
 #include "System/creg/SerializeLuaState.h"
 #include "System/creg/Serializer.h"
 #include "System/Exceptions.h"
+#include "System/Sync/SyncChecker.h"
 #include "System/Log/ILog.h"
 
 #define MAX_STRING_SIZE (1 << 19) // 512kB excluding null-term
@@ -74,6 +76,36 @@ CR_REG_METADATA(CGameStateCollector, (
 	CR_SERIALIZER(Serialize)
 ))
 
+
+/// synced state that lives outside of any creg-registered object
+static void SerializeSyncedGlobals(creg::ISerializer* s)
+{
+	auto rngState = gsRNG.GetFullState();
+	s->SerializeInt(&rngState.genState, sizeof(rngState.genState));
+	s->SerializeInt(&rngState.genStream, sizeof(rngState.genStream));
+	s->SerializeInt(&rngState.initSeed, sizeof(rngState.initSeed));
+	s->SerializeInt(&rngState.lastSeed, sizeof(rngState.lastSeed));
+
+	// the sync checksum accumulates over up to 4096 frames, a loaded
+	// game has to continue with the same value to stay comparable
+	uint32_t checksum = 0;
+	uint32_t prevChecksum = 0;
+#ifdef SYNCCHECK
+	checksum = CSyncChecker::GetChecksum();
+	prevChecksum = CSyncChecker::GetPrevChecksum();
+#endif
+	s->SerializeInt(&checksum, sizeof(checksum));
+	s->SerializeInt(&prevChecksum, sizeof(prevChecksum));
+
+	if (s->IsWriting())
+		return;
+
+	gsRNG.SetFullState(rngState);
+#ifdef SYNCCHECK
+	CSyncChecker::SetChecksum(checksum);
+	CSyncChecker::SetPrevChecksum(prevChecksum);
+#endif
+}
 
 void CGameStateCollector::Serialize(creg::ISerializer* s)
 {
@@ -110,6 +142,8 @@ void CGameStateCollector::Serialize(creg::ISerializer* s)
 	s->SerializeObjectInstance(eoh, eoh->GetClass());
 	std::unique_ptr<creg::IType> mapType = creg::DeduceType<decltype(CSplitLuaHandle::gameParams)>::Get();
 	mapType->Serialize(s, &CSplitLuaHandle::gameParams);
+
+	SerializeSyncedGlobals(s);
 
 	s->SerializeObjectInstance(CUnitDrawer::modelDrawerData->GetSavedData(), CUnitDrawer::modelDrawerData->GetSavedData()->GetClass());
 	s->SerializeObjectInstance(groundDecals, groundDecals->GetClass());
