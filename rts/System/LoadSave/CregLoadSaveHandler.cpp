@@ -1,6 +1,8 @@
 /* This file is part of the Spring engine (GPL v2 or later), see LICENSE.html */
 
+#include <cstdio>
 #include <sstream>
+#include <vector>
 #include <zlib.h>
 
 #include "ExternalAI/SkirmishAIHandler.h"
@@ -13,6 +15,7 @@
 #include "Game/GlobalUnsynced.h"
 #include "Game/WaitCommandsAI.h"
 #include "Game/SelectedUnitsHandler.h"
+#include "Game/Players/PlayerHandler.h"
 #include "Game/UI/Groups/GroupHandler.h"
 #include "Lua/LuaGaia.h"
 #include "Lua/LuaRules.h"
@@ -32,6 +35,9 @@
 #include "Sim/MoveTypes/MoveDefHandler.h"
 #include "Sim/Misc/TeamHandler.h"
 #include "Sim/Misc/GlobalSynced.h"
+#include "Sim/Path/IPathManager.h"
+#include "Sim/Units/CommandAI/BuilderCaches.h"
+#include "System/creg/STL_Set.h"
 #include "Sim/Misc/Wind.h"
 #include "Sim/Misc/YardmapStatusEffectsMap.h"
 #include "Sim/Projectiles/ProjectileHandler.h"
@@ -97,9 +103,21 @@ static void SerializeSyncedGlobals(creg::ISerializer* s)
 	s->SerializeInt(&checksum, sizeof(checksum));
 	s->SerializeInt(&prevChecksum, sizeof(prevChecksum));
 
+	// CObject sync ids order listener/dependency lists; objects created after
+	// loading must get higher ids than every loaded one, like in the original
+	int64_t curSyncID = CObject::GetCurrentSyncID();
+	s->SerializeInt(&curSyncID, sizeof(curSyncID));
+
+	// builder bookkeeping kept outside of the units, iterated in hash order
+	const auto setType = creg::DeduceType<decltype(CBuilderCaches::reclaimers)>::Get();
+	setType->Serialize(s, &CBuilderCaches::reclaimers);
+	setType->Serialize(s, &CBuilderCaches::featureReclaimers);
+	setType->Serialize(s, &CBuilderCaches::resurrecters);
+
 	if (s->IsWriting())
 		return;
 
+	CObject::RaiseCurrentSyncID(curSyncID);
 	gsRNG.SetFullState(rngState);
 #ifdef SYNCCHECK
 	CSyncChecker::SetChecksum(checksum);
@@ -134,6 +152,10 @@ void CGameStateCollector::Serialize(creg::ISerializer* s)
 	s->SerializeObjectInstance(&envResHandler, envResHandler.GetClass());
 	s->SerializeObjectInstance(&moveDefHandler, moveDefHandler.GetClass());
 	s->SerializeObjectInstance(&teamHandler, teamHandler.GetClass());
+	// player states (active, spectator, team, ...) change through network
+	// messages processed by every client at the same frame, i.e. they are
+	// synced state queried by game code
+	s->SerializeObjectInstance(&playerHandler, playerHandler.GetClass());
 	for (int a = 0; a < teamHandler.ActiveTeams(); a++) {
 		s->SerializeObjectInstance(&uiGroupHandlers[a], uiGroupHandlers[a].GetClass());
 	}
@@ -144,6 +166,16 @@ void CGameStateCollector::Serialize(creg::ISerializer* s)
 	mapType->Serialize(s, &CSplitLuaHandle::gameParams);
 
 	SerializeSyncedGlobals(s);
+
+	// pathing state refers to units, so it has to come after unitHandler
+	bool exactPathing = pathManager->HasExactSerialization();
+	s->SerializeInt(&exactPathing, sizeof(exactPathing));
+
+	if (exactPathing != pathManager->HasExactSerialization())
+		throw content_error("[CGameStateCollector] saved with a different path finder");
+
+	if (exactPathing)
+		pathManager->SerializeState(s);
 
 	s->SerializeObjectInstance(CUnitDrawer::modelDrawerData->GetSavedData(), CUnitDrawer::modelDrawerData->GetSavedData()->GetClass());
 	s->SerializeObjectInstance(groundDecals, groundDecals->GetClass());
@@ -266,6 +298,55 @@ static void SaveLuaState(CSplitLuaHandle* handle, creg::COutputStreamSerializer&
 }
 
 
+#ifdef USING_CREG
+/// serializes the complete game state (everything after the textual header)
+static void WriteGameState(std::stringstream& oss, std::vector<creg::COutputStreamSerializer::LayoutEntry>* layout)
+{
+	Sim::SaveComponents(oss);
+
+	creg::COutputStreamSerializer os;
+	os.SetLayoutRecorder(layout);
+
+	// package boundaries, lets comparisons align the packages independently
+	const auto MarkPackage = [&](uint64_t start, const char* name) {
+		if (layout != nullptr)
+			layout->push_back({start, static_cast<uint64_t>(oss.tellp()), "<package>", name});
+	};
+
+	// save lua state first as lua unit scripts depend on it
+	const int luaStart = oss.tellp();
+	SaveLuaState(luaGaia, os, oss);
+	MarkPackage(luaStart, "LuaGaia");
+	const int luaRulesStart = oss.tellp();
+	SaveLuaState(luaRules, os, oss);
+	MarkPackage(luaRulesStart, "LuaRules");
+	PrintSize("Lua", ((int)oss.tellp()) - luaStart);
+
+	// save creg state
+	const int gameStart = oss.tellp();
+	CGameStateCollector gsc;
+	os.SavePackage(&oss, &gsc, gsc.GetClass());
+	MarkPackage(gameStart, "Game");
+	PrintSize("Game", ((int)oss.tellp()) - gameStart);
+
+
+	// save AI state
+	const int aiStart = oss.tellp();
+
+	for (const auto& ai: skirmishAIHandler.GetAllSkirmishAIs()) {
+		std::stringstream aiData;
+		eoh->Save(&aiData, ai.first);
+
+		std::uint64_t aiSize = aiData.tellp();
+		creg::WriteUInt(&oss, aiSize);
+		if (aiSize > 0)
+			oss << aiData.rdbuf();
+	}
+	PrintSize("AIs", ((int)oss.tellp()) - aiStart);
+}
+#endif
+
+
 static void LoadLuaState(CSplitLuaHandle* handle, creg::CInputStreamSerializer& is, std::stringstream& iss)
 {
 	void* plsc;
@@ -303,38 +384,7 @@ void CCregLoadSaveHandler::SaveGame(const std::string& path)
 		WriteString(oss, mapName);
 
 
-		{
-			Sim::SaveComponents(oss);
-
-			creg::COutputStreamSerializer os;
-
-			// save lua state first as lua unit scripts depend on it
-			const int luaStart = oss.tellp();
-			SaveLuaState(luaGaia, os, oss);
-			SaveLuaState(luaRules, os, oss);
-			PrintSize("Lua", ((int)oss.tellp()) - luaStart);
-
-			// save creg state
-			const int gameStart = oss.tellp();
-			CGameStateCollector gsc;
-			os.SavePackage(&oss, &gsc, gsc.GetClass());
-			PrintSize("Game", ((int)oss.tellp()) - gameStart);
-
-
-			// save AI state
-			const int aiStart = oss.tellp();
-
-			for (const auto& ai: skirmishAIHandler.GetAllSkirmishAIs()) {
-				std::stringstream aiData;
-				eoh->Save(&aiData, ai.first);
-
-				std::uint64_t aiSize = aiData.tellp();
-				creg::WriteUInt(&oss, aiSize);
-				if (aiSize > 0)
-					oss << aiData.rdbuf();
-			}
-			PrintSize("AIs", ((int)oss.tellp()) - aiStart);
-		}
+		WriteGameState(oss, nullptr);
 
 		{
 			gzFile file = gzopen(dataDirsAccess.LocateFile(path, FileQueryFlags::WRITE).c_str(), "wb5");
@@ -371,6 +421,44 @@ void CCregLoadSaveHandler::SaveGame(const std::string& path)
 #else //USING_CREG
 	LOG_L(L_ERROR, "[LSH::%s] creg is disabled", __func__);
 #endif //USING_CREG
+}
+
+bool CCregLoadSaveHandler::WriteStateForComparison(const std::string& basePath)
+{
+#ifdef USING_CREG
+	selectedUnitsHandler.ClearSelected();
+
+	try {
+		std::stringstream oss;
+		std::vector<creg::COutputStreamSerializer::LayoutEntry> layout;
+
+		WriteGameState(oss, &layout);
+
+		const std::string data = oss.str();
+		FILE* stateFile = fopen((basePath + ".state").c_str(), "wb");
+		FILE* layoutFile = fopen((basePath + ".layout").c_str(), "w");
+
+		if (stateFile != nullptr)
+			fwrite(data.data(), 1, data.size(), stateFile);
+
+		if (layoutFile != nullptr) {
+			for (const auto& e: layout)
+				fprintf(layoutFile, "%llu %llu %s %s\n", (unsigned long long) e.start, (unsigned long long) e.end, e.className, e.memberName);
+		}
+
+		if (stateFile != nullptr)
+			fclose(stateFile);
+		if (layoutFile != nullptr)
+			fclose(layoutFile);
+
+		return (stateFile != nullptr && layoutFile != nullptr);
+	} catch (const std::exception& ex) {
+		LOG_L(L_ERROR, "[LSH::%s] exception \"%s\"", __func__, ex.what());
+	} catch (const std::string& str) {
+		LOG_L(L_ERROR, "[LSH::%s] str error \"%s\"", __func__, str.c_str());
+	}
+#endif
+	return false;
 }
 
 /// loads the data (map&mod-name,setup-script) needed by PreGame

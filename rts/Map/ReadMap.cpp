@@ -340,7 +340,9 @@ void CReadMap::PostLoad()
 	const SRectangle fullRect = {0, 0, mapDims.mapx, mapDims.mapy};
 	featureHandler.TerrainChanged(fullRect.x1, fullRect.z1, fullRect.x2, fullRect.z2);
 	smoothGround.MapChanged(fullRect.x1, fullRect.z1, fullRect.x2, fullRect.z2);
-	pathManager->TerrainChange(fullRect.x1, fullRect.z1, fullRect.x2, fullRect.z2, TERRAINCHANGE_DAMAGE_RECALCULATION);
+
+	if (!pathManager->HasExactSerialization())
+		pathManager->TerrainChange(fullRect.x1, fullRect.z1, fullRect.x2, fullRect.z2, TERRAINCHANGE_DAMAGE_RECALCULATION);
 }
 #endif //USING_CREG
 

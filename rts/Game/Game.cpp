@@ -490,11 +490,16 @@ void CGame::Load(const std::string& mapFileName)
 			// Update height bounds and pathing after pregame or a saved game load.
 			{
 				ENTER_SYNCED_CODE();
-				//needed in case pre-game terraform changed the map
-				readMap->UpdateHeightBounds();
-				Watchdog::ClearTimer(WDT_LOAD);
-				pathManager->PostFinalizeRefresh();
-				Watchdog::ClearTimer(WDT_LOAD);
+				// a saved game restores both exactly (if supported by the path manager)
+				const bool exactSavedState = (saveFileHandler != nullptr && pathManager->HasExactSerialization());
+
+				if (!exactSavedState) {
+					//needed in case pre-game terraform changed the map
+					readMap->UpdateHeightBounds();
+					Watchdog::ClearTimer(WDT_LOAD);
+					pathManager->PostFinalizeRefresh();
+					Watchdog::ClearTimer(WDT_LOAD);
+				}
 
 				if (saveFileHandler != nullptr)
 					SimStateTestHooks::PostLoadGame(gs->frameNum);
