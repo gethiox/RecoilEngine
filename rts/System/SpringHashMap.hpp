@@ -11,6 +11,7 @@
 #include <cstdlib>
 #include <iterator>
 #include <utility>
+#include <vector>
 
 #define DCHECK_EQ_F(a, b)
 #define DCHECK_LT_F(a, b)
@@ -535,6 +536,56 @@ public:
 
 		::operator delete(old_states);
 		::operator delete(old_pairs);
+	}
+
+	/*
+	 * SPRING: exact layout (de)serialization.
+	 *
+	 * Iteration order of this open-addressing map depends on its bucket
+	 * count and on the insertion/erase history (tombstones), so re-inserting
+	 * the elements of a saved map does not reproduce it. These allow storing
+	 * and restoring the complete layout instead (only meaningful when the
+	 * hash of a key does not depend on memory addresses).
+	 */
+	size_t layout_bucket_count() const { return _num_buckets; }
+	int layout_max_probe_length() const { return _max_probe_length; }
+	uint8_t layout_state(size_t bucket) const { return static_cast<uint8_t>(_states[bucket]); }
+	static constexpr uint8_t LAYOUT_STATE_FILLED = static_cast<uint8_t>(2);
+
+	/// clears the map and adopts the given layout; every FILLED bucket must then be set via layout_fill()
+	void layout_restore(size_t num_buckets, int max_probe_length, const std::vector<uint8_t>& states)
+	{
+		clear();
+
+		if (num_buckets != _num_buckets) {
+			::operator delete(_states);
+			::operator delete(_pairs);
+
+			_states = (num_buckets > 0) ? reinterpret_cast<State*>(::operator new(num_buckets * sizeof(State))) : nullptr;
+			_pairs  = (num_buckets > 0) ? reinterpret_cast<PairT*>(::operator new(num_buckets * sizeof(PairT))) : nullptr;
+			_num_buckets = num_buckets;
+			_mask = (num_buckets > 0) ? (num_buckets - 1) : 0;
+		}
+
+		// FILLED buckets are only marked as such once constructed
+		for (size_t bucket = 0; bucket < num_buckets; ++bucket) {
+			const State st = static_cast<State>(states[bucket]);
+			_states[bucket] = (st == State::FILLED) ? State::INACTIVE : st;
+		}
+
+		_max_probe_length = max_probe_length;
+	}
+
+	/// constructs the element of a FILLED bucket of a restored layout
+	PairT& layout_fill(size_t bucket, KeyT&& key)
+	{
+		DCHECK_LT_F(bucket, _num_buckets);
+		DCHECK_NE_F(_states[bucket], State::FILLED);
+
+		new(_pairs + bucket) PairT(std::move(key), ValueT());
+		_states[bucket] = State::FILLED;
+		_num_filled += 1;
+		return _pairs[bucket];
 	}
 
 private:
