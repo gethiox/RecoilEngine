@@ -23,9 +23,12 @@
 struct MoveDef;
 
 namespace QTPFS {
+	class PathManagerSerializer;
 	struct INode;
 
 	struct NodeLayer {
+		friend class PathManagerSerializer;
+
 	public:
 		static void InitStatic();
 		static size_t MaxSpeedModTypeValue() { return (std::numeric_limits<SpeedModType>::max()); }

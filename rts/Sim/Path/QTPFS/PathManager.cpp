@@ -15,6 +15,7 @@
 
 #include "PathDefines.h"
 #include "PathManager.h"
+#include "PathManagerSerializer.h"
 
 #include "Utils/PathSpeedModInfoSystemUtils.h"
 
@@ -312,6 +313,10 @@ std::int64_t QTPFS::PathManager::Finalize() {
 	const spring_time dt = t1 - t0;
 
 	return (dt.toMilliSecsi());
+}
+
+void QTPFS::PathManager::SerializeState(creg::ISerializer* s) {
+	PathManagerSerializer(*this).Serialize(s);
 }
 
 std::int64_t QTPFS::PathManager::PostFinalizeRefresh() {

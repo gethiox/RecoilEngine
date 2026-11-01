@@ -13,6 +13,8 @@
 struct MoveDef;
 class CSolidObject;
 
+namespace creg { class ISerializer; }
+
 class IPathManager {
 public:
 	static IPathManager* GetInstance(int type);
@@ -36,6 +38,14 @@ public:
 	 */
 	virtual bool PathUpdated(unsigned int pathID) { return false; }
 	virtual void ClearPathUpdated(unsigned int pathID) {}
+
+	/**
+	 * Whether SerializeState() stores and restores the complete pathing
+	 * state, such that a loaded game continues exactly like the original
+	 * one. Without it, loaded units have to re-request their paths.
+	 */
+	virtual bool HasExactSerialization() const { return false; }
+	virtual void SerializeState(creg::ISerializer* s) {}
 
 	virtual void RemoveCacheFiles() {}
 	virtual void Update() {}

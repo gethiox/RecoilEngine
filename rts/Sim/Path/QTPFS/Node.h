@@ -24,11 +24,14 @@
 #define QTNODE_CHILD_COUNT 4
 
 namespace QTPFS {
+	class PathManagerSerializer;
 	struct NodeLayer;
 	struct SearchNode;
 	struct UpdateThreadData;
 
 	struct INode {
+		friend class PathManagerSerializer;
+
 			friend SearchNode;
 	public:
 		struct NeighbourPoints {

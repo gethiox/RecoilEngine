@@ -21,7 +21,10 @@
 class CSolidObject;
 
 namespace QTPFS {
+	class PathManagerSerializer;
 	struct IPath {
+		friend class PathManagerSerializer;
+
 		struct PathNodeData {
 			uint32_t nodeId = -1U;
 			uint32_t nodeNumber = -1U;

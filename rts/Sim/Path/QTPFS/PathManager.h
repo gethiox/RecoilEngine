@@ -18,8 +18,11 @@ class CSolidObject;
 
 
 namespace QTPFS {
+	class PathManagerSerializer;
 	struct QTNode;
 	class PathManager: public IPathManager {
+		friend class PathManagerSerializer;
+
 		friend class RequestPathInternalSystem;
 
 		struct ResolvedPath {
@@ -53,6 +56,9 @@ namespace QTPFS {
 
 		std::int64_t Finalize() override;
 		std::int64_t PostFinalizeRefresh() override;
+
+		bool HasExactSerialization() const override { return true; }
+		void SerializeState(creg::ISerializer* s) override;
 
 		bool PathUpdated(unsigned int pathID) override;
 		void ClearPathUpdated(unsigned int pathID) override;

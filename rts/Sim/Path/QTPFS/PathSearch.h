@@ -15,6 +15,7 @@
 struct CollisionVolume;
 
 namespace QTPFS {
+	class PathManagerSerializer;
 	struct IPath;
 	struct NodeLayer;
 	struct PathCache;
@@ -73,6 +74,8 @@ namespace QTPFS {
 	}
 
 	struct PathSearch {
+		friend class PathManagerSerializer;
+
 		void SetID(unsigned int n) { searchID = n; }
 		void SetTeam(unsigned int n) { searchTeam = n; }
 		unsigned int GetID() const { return searchID; }
