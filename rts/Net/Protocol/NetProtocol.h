@@ -122,7 +122,7 @@ private:
 	mutable spring::spinlock serverConnMutex;
 
 	uint8_t serverConnMem[1024];
-	uint8_t demoRecordMem[ 512];
+	uint8_t demoRecordMem[1024];
 
 	netcode::CConnection* serverConnPtr = nullptr;
 	CDemoRecorder* demoRecordPtr = nullptr;
