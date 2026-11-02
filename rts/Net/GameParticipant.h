@@ -48,6 +48,12 @@ public:
 	bool isReconn = false;
 	bool isMidgameJoin = false;
 
+	/// joining via a game snapshot which is still being prepared; the client
+	/// gets no game packets until it was sent the snapshot (or told to catch up)
+	bool awaitingSnapshot = false;
+	/// frames before this one are covered by the client's snapshot (no sync responses)
+	int syncCheckStartFrame = 0;
+
 	PlayerStatistics lastStats;
 
 	spring_time disconnectDelay;

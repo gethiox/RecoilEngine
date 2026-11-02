@@ -5,6 +5,7 @@
 #include "System/Net/LocalConnection.h"
 
 #include "NetProtocol.h"
+#include "Net/SnapshotJoinClient.h"
 #include "Game/ClientSetup.h"
 #include "Game/GlobalUnsynced.h"
 #include "Sim/Misc/GlobalConstants.h"
@@ -56,7 +57,7 @@ void CNetProtocol::InitClient(std::shared_ptr<ClientSetup> clientSetup, const st
 
 	serverConnPtr = new (serverConnMem) netcode::UDPConnection(configHandler->GetInt("SourcePort"), clientSetup->hostIP, clientSetup->hostPort);
 	serverConnPtr->Unmute();
-	serverConnPtr->SendData(CBaseNetProtocol::Get().SendAttemptConnect(userName, userPasswd, clientVersion, clientPlatform, globalConfig.networkLossFactor));
+	serverConnPtr->SendData(CBaseNetProtocol::Get().SendAttemptConnect(userName, userPasswd, clientVersion, clientPlatform, globalConfig.networkLossFactor, false, CSnapshotJoinClient::WantsSnapshotJoin()));
 	serverConnPtr->Flush(true);
 
 	LOG("[NetProto::%s] connecting to IP %s on port %i using name %s", __func__, clientSetup->hostIP.c_str(), clientSetup->hostPort, userName.c_str());
@@ -108,7 +109,7 @@ std::string CNetProtocol::ConnectionStr() const
 
 std::shared_ptr<const netcode::RawPacket> CNetProtocol::Peek(unsigned ahead) const
 {
-	// the connection may be updated by another thread (bulk transfers)
+	// the connection may be updated by another thread (bulk transfers, see CSnapshotJoinClient)
 	std::lock_guard<spring::spinlock> lock(serverConnMutex);
 	return serverConnPtr->Peek(ahead);
 }
@@ -138,6 +139,11 @@ std::shared_ptr<const netcode::RawPacket> CNetProtocol::GetData(int frameNum)
 	if (ret == nullptr)
 		return ret;
 	if (ret->data[0] == NETMSG_GAMEDATA)
+		return ret;
+	// snapshot transfers are not part of the game (the history is recorded separately); requests only as stream markers
+	if (ret->data[0] == NETMSG_SNAPSHOT_DATA || ret->data[0] == NETMSG_SNAPSHOT_HASH || ret->data[0] == NETMSG_SNAPSHOT_HISTORY)
+		return ret;
+	if (ret->data[0] == NETMSG_SNAPSHOT_REQUEST && (ret->length < 3 || ret->data[2] != SNAPSHOT_ROLE_MARKER))
 		return ret;
 
 	if (demoRecordPtr->IsValid())

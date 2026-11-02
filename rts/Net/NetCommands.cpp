@@ -37,6 +37,7 @@
 #include "System/Net/UnpackPacket.h"
 #include "System/Sound/ISound.h"
 #include "System/Sync/DumpState.h"
+#include "Net/SnapshotJoinClient.h"
 #include "Game/SimStateTestHooks.h"
 #include "System/Sync/DumpHistory.h"
 
@@ -259,6 +260,10 @@ float CGame::GetNetMessageProcessingTimeLimit() const
 
 void CGame::ClientReadNet()
 {
+	// start a game joined from a snapshot, upload pending snapshot data (if this client is a snapshot source)
+	snapshotJoinClient.Start(this);
+	snapshotJoinClient.Update();
+
 	// first look ahead so we can adapt consumeSpeedMult to network fluctuations
 	// (smooths simframes across each full second, and balances the time spent in
 	// sim & drawing)
@@ -316,6 +321,24 @@ void CGame::ClientReadNet()
 		const uint8_t packetCode = inbuf[0];
 
 		switch (packetCode) {
+			case NETMSG_SNAPSHOT_REQUEST: {
+				// a role assignment or, if this client was assigned a role, the snapshot point
+				snapshotJoinClient.HandleRequest(packet);
+			} break;
+
+			case NETMSG_SNAPSHOT_HASH: {
+				snapshotJoinClient.HandleServerHash(packet);
+			} break;
+
+			case NETMSG_SNAPSHOT_DATA: {
+				// only expected while joining (PreGame)
+			} break;
+
+			case NETMSG_SNAPSHOT_HISTORY: {
+				// joined from a snapshot: the game history before it, for the demo
+				snapshotJoinClient.HandleHistory(packet, this);
+			} break;
+
 			case NETMSG_QUIT: {
 				ZoneScopedN("Net::Quit");
 				try {

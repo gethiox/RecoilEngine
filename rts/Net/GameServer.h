@@ -62,9 +62,12 @@ private:
  * checking and forwarding gamedata to the clients. It keeps track of the sync,
  * cpu and other stats and informs all clients about events.
  */
+class CSnapshotJoinServer;
+
 class CGameServer
 {
 	friend class CCregLoadSaveHandler; // For initializing server state after load
+	friend class CSnapshotJoinServer;
 public:
 	CGameServer(
 		const std::shared_ptr<const ClientSetup> newClientSetup,
@@ -152,7 +155,8 @@ private:
 		const std::string& clientPlatform,
 		bool isLocal,
 		bool reconnect = false,
-		int netloss = 0
+		int netloss = 0,
+		bool snapshotJoin = false
 	);
 
 	void CheckForGameStart(bool forced = false);
@@ -291,6 +295,7 @@ private:
 
 	std::unique_ptr<netcode::UDPListener> udpListener;
 	std::unique_ptr<CDemoReader> demoReader;
+	std::unique_ptr<CSnapshotJoinServer> snapshotJoin;
 	std::unique_ptr<CDemoRecorder> demoRecorder;
 	std::unique_ptr<AutohostInterface> hostif;
 

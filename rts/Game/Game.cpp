@@ -125,6 +125,7 @@
 #include "System/LoadSave/LoadSaveHandler.h"
 #include "System/LoadSave/DemoRecorder.h"
 #include "Game/SimStateTestHooks.h"
+#include "Net/SnapshotJoinClient.h"
 #include "System/Log/ILog.h"
 #include "System/Platform/Misc.h"
 #include "System/Platform/Watchdog.h"
@@ -293,6 +294,8 @@ CGame::~CGame()
 	LOG("[Game::%s][1]", __func__);
 
 	SimStateTestHooks::Kill();
+	// stops a snapshot upload (uses clientNet from another thread)
+	snapshotJoinClient.Reset();
 	RmlGui::Shutdown();
 	helper->Kill();
 	KillLua(true);
@@ -1704,6 +1707,23 @@ void CGame::StartPlaying()
 
 	if (saveFileHandler == nullptr)
 		eventHandler.GameStart();
+}
+
+void CGame::StartPlayingFromSnapshot()
+{
+	RECOIL_DETAILED_TRACY_ZONE;
+	// the synced effects of starting (playing, start positions, GameStart)
+	// are part of the loaded snapshot, only the local ones are missing
+	playing = true;
+
+	lastReadNetTime = spring_gettime();
+
+	gu->startTime = gu->gameTime;
+	gu->myTeam = gu->GetMyPlayer()->team;
+	gu->myAllyTeam = teamHandler.AllyTeam(gu->myTeam);
+
+	GameSetupDrawer::Disable();
+	CLuaUI::UpdateTeams();
 }
 
 static const char* const tracingSimFrameName = "SimFrame";

@@ -22,7 +22,7 @@ GameParticipant::~GameParticipant()
 
 void GameParticipant::SendData(std::shared_ptr<const netcode::RawPacket> packet)
 {
-	if (clientLink != nullptr && myState != GameParticipant::State::DISCONNECTING)
+	if (clientLink != nullptr && myState != GameParticipant::State::DISCONNECTING && !awaitingSnapshot)
 		clientLink->SendData(packet);
 }
 
