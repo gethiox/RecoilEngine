@@ -9,7 +9,9 @@
 #include "Map/Ground.h"
 #include "Map/ReadMap.h"
 #include "Sim/Misc/ModInfo.h"
+#include "System/Exceptions.h"
 #include "System/float3.h"
+#include "System/creg/ISerializer.h"
 #include "System/Log/ILog.h"
 #include "System/SpringMath.h"
 #include "System/TimeProfiler.h"
@@ -708,3 +710,66 @@ void SmoothHeightMesh::MakeSmoothMesh() {
 	// constexpr float gSigma = 5.0f;
 	// fillGaussianKernelFunc(gaussianKernel, gSigma);
 // =============================================
+
+
+void SmoothHeightMesh::Serialize(creg::ISerializer* s)
+{
+	const auto SerializeVector = [s](auto& vec) {
+		using T = typename std::remove_reference_t<decltype(vec)>::value_type;
+		static_assert(std::is_trivially_copyable_v<T>);
+
+		uint32_t size = vec.size();
+		s->SerializeInt(&size, sizeof(size));
+
+		if (!s->IsWriting() && size != vec.size())
+			throw content_error("[SmoothHeightMesh::Serialize] mesh dimensions mismatch");
+
+		s->Serialize(vec.data(), size * sizeof(T));
+	};
+	const auto SerializeQueue = [s](std::queue<int>& queue) {
+		std::vector<int> items;
+
+		if (s->IsWriting()) {
+			for (std::queue<int> copy = queue; !copy.empty(); copy.pop())
+				items.push_back(copy.front());
+		}
+
+		uint32_t size = items.size();
+		s->SerializeInt(&size, sizeof(size));
+		items.resize(size);
+		s->Serialize(items.data(), size * sizeof(int));
+
+		if (s->IsWriting())
+			return;
+
+		queue = {};
+
+		for (const int i: items)
+			queue.push(i);
+	};
+
+	s->SerializeInt(&enabled, sizeof(enabled));
+
+	SerializeVector(maximaMesh);
+	SerializeVector(mesh);
+	SerializeVector(tempMesh); // holds results between the blur passes
+	SerializeVector(origMesh);
+	SerializeVector(colsMaxima);
+	SerializeVector(maximaRows);
+
+	{
+		std::vector<uint8_t> damageMap(mapChangeTrack.damageMap.begin(), mapChangeTrack.damageMap.end());
+		SerializeVector(damageMap);
+		std::copy(damageMap.begin(), damageMap.end(), mapChangeTrack.damageMap.begin());
+	}
+
+	SerializeQueue(mapChangeTrack.damageQueue[0]);
+	SerializeQueue(mapChangeTrack.damageQueue[1]);
+	SerializeQueue(mapChangeTrack.horizontalBlurQueue);
+	SerializeQueue(mapChangeTrack.verticalBlurQueue);
+
+	s->SerializeInt(&mapChangeTrack.width, sizeof(mapChangeTrack.width));
+	s->SerializeInt(&mapChangeTrack.height, sizeof(mapChangeTrack.height));
+	s->SerializeInt(&mapChangeTrack.queueReleaseOnFrame, sizeof(mapChangeTrack.queueReleaseOnFrame));
+	s->SerializeInt(&mapChangeTrack.activeBuffer, sizeof(mapChangeTrack.activeBuffer));
+}

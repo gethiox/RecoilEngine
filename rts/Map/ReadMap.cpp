@@ -28,7 +28,6 @@
 #include "Game/GlobalUnsynced.h"
 #include "Sim/Features/FeatureHandler.h"
 #include "Sim/Misc/LosHandler.h"
-#include "Sim/Misc/SmoothHeightMesh.h"
 #include "Sim/Objects/SolidObject.h"
 #include "Sim/Path/IPathManager.h"
 
@@ -339,7 +338,6 @@ void CReadMap::PostLoad()
 	// they still have to be told that the terrain differs from the map file
 	const SRectangle fullRect = {0, 0, mapDims.mapx, mapDims.mapy};
 	featureHandler.TerrainChanged(fullRect.x1, fullRect.z1, fullRect.x2, fullRect.z2);
-	smoothGround.MapChanged(fullRect.x1, fullRect.z1, fullRect.x2, fullRect.z2);
 
 	if (!pathManager->HasExactSerialization())
 		pathManager->TerrainChange(fullRect.x1, fullRect.z1, fullRect.x2, fullRect.z2, TERRAINCHANGE_DAMAGE_RECALCULATION);

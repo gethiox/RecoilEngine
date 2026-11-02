@@ -31,6 +31,7 @@
 #include "Sim/Misc/InterceptHandler.h"
 #include "Sim/Misc/LosHandler.h"
 #include "Sim/Misc/QuadField.h"
+#include "Sim/Misc/SmoothHeightMesh.h"
 #include "Sim/Misc/CategoryHandler.h"
 #include "Sim/MoveTypes/MoveDefHandler.h"
 #include "Sim/Misc/TeamHandler.h"
@@ -113,6 +114,8 @@ static void SerializeSyncedGlobals(creg::ISerializer* s)
 	setType->Serialize(s, &CBuilderCaches::reclaimers);
 	setType->Serialize(s, &CBuilderCaches::featureReclaimers);
 	setType->Serialize(s, &CBuilderCaches::resurrecters);
+
+	smoothGround.Serialize(s);
 
 	if (s->IsWriting())
 		return;
