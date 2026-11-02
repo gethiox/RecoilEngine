@@ -1018,9 +1018,21 @@ void creg_lua_State::Serialize(creg::ISerializer* s)
 		} else {
 			c_savedpc_offset = 0;
 		}
-		s->SerializeInt(&c->nresults, sizeof(c->nresults));
-		s->SerializeInt(&c->tailcalls, sizeof(c->tailcalls));
+		// Lua never initializes (or reads) the tail call count of C functions and
+		// the results of the base frame; write zeros instead of stale memory
+		int c_nresults = c->nresults;
+		int c_tailcalls = c->tailcalls;
+		if (s->IsWriting()) {
+			if (c == base_ci)
+				c_nresults = 0;
+			if (c == base_ci || !ttisfunction(c->func) || clvalue(c->func)->c.isC)
+				c_tailcalls = 0;
+		}
+		s->SerializeInt(&c_nresults, sizeof(c->nresults));
+		s->SerializeInt(&c_tailcalls, sizeof(c->tailcalls));
 		if (!s->IsWriting()) {
+			c->nresults = c_nresults;
+			c->tailcalls = c_tailcalls;
 			c->base = stack + c_base_offset;
 			c->top = stack + c_top_offset;
 			c->func = stack + c_func_offset;
