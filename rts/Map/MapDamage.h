@@ -5,6 +5,10 @@
 
 #include "System/float3.h"
 
+namespace creg {
+	class ISerializer;
+}
+
 class IMapDamage
 {
 public:
@@ -21,6 +25,9 @@ public:
 
 	virtual void Init() = 0;
 	virtual void Update() = 0;
+
+	/// explosions whose terrain changes are still being applied (saved games, snapshots)
+	virtual void Serialize(creg::ISerializer* s) {}
 
 	virtual bool Disabled() const = 0;
 

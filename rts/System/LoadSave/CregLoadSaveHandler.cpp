@@ -10,6 +10,8 @@
 #include "ExternalAI/EngineOutHandler.h"
 #include "CregLoadSaveHandler.h"
 #include "GameSnapshot.h"
+#include "Map/MapDamage.h"
+#include "Map/MapInfo.h"
 #include "Map/ReadMap.h"
 #include "Game/Game.h"
 #include "Game/GameSetup.h"
@@ -43,6 +45,7 @@
 #include "Sim/Weapons/Weapon.h"
 #include "Sim/Path/IPathManager.h"
 #include "Sim/Units/CommandAI/BuilderCaches.h"
+#include "System/creg/RawSerialize.h"
 #include "System/creg/STL_Set.h"
 #include "Sim/Misc/Wind.h"
 #include "Sim/Misc/YardmapStatusEffectsMap.h"
@@ -124,8 +127,34 @@ static void SerializeSyncedGlobals(creg::ISerializer* s)
 
 	smoothGround.Serialize(s);
 
+	// terrain type properties can be changed by synced Lua (Spring.SetTerrainTypeData)
+	{
+		creg::RawArchive ar(s);
+
+		for (int i = 0; i < CMapInfo::NUM_TERRAIN_TYPES; i++) {
+			CMapInfo::TerrainType& tt = const_cast<CMapInfo::TerrainType&>(mapInfo->terrainTypes[i]);
+
+			ar.String(tt.name);
+			ar.Value(tt.hardness);
+			ar.Value(tt.tankSpeed);
+			ar.Value(tt.kbotSpeed);
+			ar.Value(tt.hoverSpeed);
+			ar.Value(tt.shipSpeed);
+			ar.Value(tt.receiveTracks);
+		}
+	}
+
+	// explosions still deforming the terrain
+	mapDamage->Serialize(s);
+
 	if (s->IsWriting())
 		return;
+
+	// derived hardness tables; speed changes need no repathing here, the
+	// path finder state is loaded as it was
+	for (int i = 0; i < CMapInfo::NUM_TERRAIN_TYPES; i++) {
+		mapDamage->TerrainTypeHardnessChanged(i);
+	}
 
 	CObject::RaiseCurrentSyncID(curSyncID);
 	gsRNG.SetFullState(rngState);
