@@ -73,6 +73,7 @@ CLIENT_SCRIPT = """[game]
 	ishost=0;
 	myplayername=@NAME@;
 	mypasswd=@PASS@;
+	@EXTRA@
 }
 """
 
@@ -176,7 +177,7 @@ def main():
 	ap.add_argument("--sources", type=int, default=3)
 	ap.add_argument("--bob-spectator", action="store_true", help="bob is a spectator (only spectator sources allowed)")
 	ap.add_argument("--no-snapshot", action="store_true", help="rejoin with classic catch-up (baseline)")
-	ap.add_argument("--kill", action="store_true", help="kill bob (SIGKILL) instead of letting him quit")
+	ap.add_argument("--kill", action="store_true", help="kill bob (SIGKILL) instead of letting him quit; he rejoins before the server noticed")
 	ap.add_argument("--timeout", type=int, default=1800)
 	ap.add_argument("--compare-frame", type=int, default=-1,
 		help="alice and carol write their snapshot data at this frame; compared with compare_states.py")
@@ -234,19 +235,18 @@ def main():
 		sd = mkdir("server")
 		write(os.path.join(sd, "script.txt"), server_script)
 		write(os.path.join(sd, "springsettings.cfg"),
-		      "AllowSnapshotJoin = %d\nSnapshotJoinSources = %d\nServerRecordDemos = 1\nLogFlushLevel = 0\n" % (0 if args.no_snapshot else 1, args.sources)
-		      # a killed client can only rejoin once the server dropped its old connection
-		      + ("NetworkTimeout = 10\n" if args.kill else ""))
+		      "AllowSnapshotJoin = %d\nSnapshotJoinSources = %d\nServerRecordDemos = 1\nLogFlushLevel = 0\n" % (0 if args.no_snapshot else 1, args.sources))
 		server = Proc("server", engine_cmd(args.dedicated, sd, os.path.join(sd, "script.txt")), sd)
 		procs.append(server)
 		time.sleep(2)
 
-		def start_client(name, passwd, dirname, extra):
+		def start_client(name, passwd, dirname, extra, script_extra=""):
 			d = mkdir(dirname)
 			seed_cache(d)
 			write(os.path.join(d, "script.txt"),
-			      CLIENT_SCRIPT.replace("@PORT@", str(PORT)).replace("@NAME@", name).replace("@PASS@", passwd))
-			cfg = {"SimStateTestChecksumLog": os.path.join(d, "checksums.log"), "SnapshotJoin": 1, "LogFlushLevel": 0}
+			      CLIENT_SCRIPT.replace("@PORT@", str(PORT)).replace("@NAME@", name).replace("@PASS@", passwd).replace("@EXTRA@", script_extra))
+			# joining from a snapshot is opt-in (config SnapshotJoin, default off)
+			cfg = {"SimStateTestChecksumLog": os.path.join(d, "checksums.log"), "LogFlushLevel": 0}
 			if args.no_luaui:
 				cfg["SimStateTestDisableLuaUI"] = 1
 			cfg.update(extra)
@@ -276,14 +276,6 @@ def main():
 		wait_for(lambda: not bob1.alive(), 60, "bob exit")
 		log("bob left at frame %d (alice at %d)" % (last_frame(os.path.join(bob1_dir, "checksums.log")), last_frame(os.path.join(alice_dir, "checksums.log"))))
 
-		if args.kill:
-			# the server rejects connections of a player whose old connection did not time out yet
-			def server_dropped_bob():
-				with open(os.path.join(args.data_dir, "infolog.txt"), errors="replace") as f:
-					return "Player Bob left the game" in f.read()
-			wait_for(server_dropped_bob, 120, "the server to drop bob's connection")
-			log("the server dropped bob's connection")
-
 		# let the game progress a bit without bob
 		wait_for(lambda: last_frame(os.path.join(alice_dir, "checksums.log")) >= rejoin_frame or not alice.alive(), args.timeout, "alice rejoin frame")
 
@@ -291,7 +283,10 @@ def main():
 			raise RuntimeError("the game ended before bob could rejoin, use a lower --speed or later --end-frame")
 
 		t0 = time.time()
-		bob2, bob2_dir = start_client("Bob", "pb", "bob2", dict(cmp, SimStateTestQuitFrame=args.end_frame, SnapshotJoin=0 if args.no_snapshot else 1, **dump))
+		# the lobby opts in for this join through the start script; a killed bob
+		# rejoins at once, his new connection replaces the one the server still has
+		bob2, bob2_dir = start_client("Bob", "pb", "bob2", dict(cmp, SimStateTestQuitFrame=args.end_frame, **dump),
+		                              "" if args.no_snapshot else "snapshotjoin=1;")
 		log("bob rejoining at alice frame %d" % last_frame(os.path.join(alice_dir, "checksums.log")))
 
 		for p in (alice, carol, bob2):
@@ -321,6 +316,12 @@ def main():
 	for line in server_out.splitlines():
 		if "[SnapshotJoin]" in line or "Sync error" in line or "sync" in line.lower() and "error" in line.lower():
 			log("server: " + line.split("] ", 1)[-1][:160])
+
+	if args.kill:
+		# the server still had bob's old connection when he came back
+		replaced = "Bob left the game:  terminating existing connection" in server_out
+		log(("PASS" if replaced else "FAIL") + " bob's new connection replaced the one the server still had")
+		ok &= replaced
 
 	joined = re.search(r"continuing the game from the snapshot of frame (\d+)", bob_out)
 	if not args.no_snapshot:
