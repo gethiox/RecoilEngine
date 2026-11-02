@@ -12,6 +12,7 @@
 #include "System/Exceptions.h"
 #include "System/float3.h"
 #include "System/creg/ISerializer.h"
+#include "System/creg/RawSerialize.h"
 #include "System/Log/ILog.h"
 #include "System/SpringMath.h"
 #include "System/TimeProfiler.h"
@@ -714,18 +715,8 @@ void SmoothHeightMesh::MakeSmoothMesh() {
 
 void SmoothHeightMesh::Serialize(creg::ISerializer* s)
 {
-	const auto SerializeVector = [s](auto& vec) {
-		using T = typename std::remove_reference_t<decltype(vec)>::value_type;
-		static_assert(std::is_trivially_copyable_v<T>);
-
-		uint32_t size = vec.size();
-		s->SerializeInt(&size, sizeof(size));
-
-		if (!s->IsWriting() && size != vec.size())
-			throw content_error("[SmoothHeightMesh::Serialize] mesh dimensions mismatch");
-
-		s->Serialize(vec.data(), size * sizeof(T));
-	};
+	// the sizes are fixed by the mesh dimensions
+	const auto SerializeVector = [s](auto& vec) { creg::RawArchive(s).FixedPodContainer(vec); };
 	const auto SerializeQueue = [s](std::queue<int>& queue) {
 		std::vector<int> items;
 

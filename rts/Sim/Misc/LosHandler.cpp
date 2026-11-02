@@ -11,6 +11,7 @@
 #include "System/Exceptions.h"
 #include "System/Log/ILog.h"
 #include "System/SpringHash.h"
+#include "System/creg/RawSerialize.h"
 #include "System/creg/STL_Deque.h"
 #include "System/EventHandler.h"
 #include "System/SafeUtil.h"
@@ -1036,14 +1037,7 @@ namespace {
 
 	template<typename T> void SerializePodVector(creg::ISerializer* s, std::vector<T>& vec)
 	{
-		static_assert(std::is_trivially_copyable_v<T>);
-		uint32_t size = vec.size();
-		SerializeValue(s, size);
-
-		if (!s->IsWriting())
-			vec.resize(size);
-
-		s->Serialize(vec.data(), size * sizeof(T));
+		creg::RawArchive(s).PodContainer(vec);
 	}
 
 	template<typename C, typename ToID, typename FromID>

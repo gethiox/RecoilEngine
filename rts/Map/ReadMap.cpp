@@ -15,6 +15,7 @@
 #include "Game/LoadScreen.h"
 #include "System/EventHandler.h"
 #include "System/Exceptions.h"
+#include "System/creg/RawSerialize.h"
 #include "System/SpringMath.h"
 #include "System/Threading/ThreadPool.h"
 #include "System/FileSystem/ArchiveScanner.h"
@@ -205,18 +206,8 @@ void CReadMap::SerializeSyncedDerivedMaps(creg::ISerializer* s)
 	// the paced height-bounds computation resets every GAME_SPEED frames.
 	// A loaded game has to continue with exactly the same (possibly stale)
 	// data, so it is stored verbatim instead of being recomputed.
-	const auto SerializeVector = [s](auto& vec) {
-		using T = typename std::remove_reference_t<decltype(vec)>::value_type;
-		static_assert(std::is_trivially_copyable_v<T>);
-
-		uint32_t size = vec.size();
-		s->SerializeInt(&size, sizeof(size));
-
-		if (!s->IsWriting() && size != vec.size())
-			throw content_error("[ReadMap::SerializeSyncedDerivedMaps] map dimensions mismatch");
-
-		s->Serialize(vec.data(), size * sizeof(T));
-	};
+	// the sizes are fixed by the map dimensions
+	const auto SerializeVector = [s](auto& vec) { creg::RawArchive(s).FixedPodContainer(vec); };
 
 	SerializeVector(centerHeightMap);
 
