@@ -3,7 +3,10 @@
 #include "GameSnapshot.h"
 
 #include <cstring>
-#include <zlib.h>
+
+#include <Alloc.h>
+#include <Lzma2Dec.h>
+#include <Lzma2Enc.h>
 
 #include "CregLoadSaveHandler.h"
 #include "System/Sync/SHA512.hpp"
@@ -60,27 +63,57 @@ size_t GameSnapshot::ReadHeader(const std::string& raw, Header& header)
 }
 
 
+// LZMA2 instead of zlib: most of a snapshot is path finder and height map data
+// that repeats at distances far beyond zlib's 32 kB window (a typical
+// snapshot is about 4 times smaller, at 2-3 times the compression time)
+static constexpr uint32_t LZMA2_DICT_SIZE = 16 << 20;
+static constexpr uint64_t LZMA2_BLOCK_SIZE = 32 << 20;
+static constexpr int LZMA2_THREADS = 2; // ~450 MB while compressing
+
 bool GameSnapshot::Compress(const std::string& raw, std::string& compressed, int level)
 {
-	// format: uint64 raw size, zlib stream
+	// format: uint64 raw size, uint8 LZMA2 properties, LZMA2 stream
 	const uint64_t rawSize = raw.size();
-	uLongf bound = compressBound(raw.size());
 
-	compressed.resize(sizeof(rawSize) + bound);
+	CLzma2EncProps props;
+	Lzma2EncProps_Init(&props);
+	props.lzmaProps.level = level;
+	props.lzmaProps.dictSize = LZMA2_DICT_SIZE;
+	props.blockSize = LZMA2_BLOCK_SIZE;
+	props.numBlockThreads_Max = LZMA2_THREADS;
+	props.numTotalThreads = LZMA2_THREADS;
+	Lzma2EncProps_Normalize(&props);
+
+	CLzma2EncHandle enc = Lzma2Enc_Create(&g_Alloc, &g_BigAlloc);
+
+	if (enc == nullptr)
+		return false;
+
+	size_t outSize = raw.size() + raw.size() / 64 + (1 << 16);
+	compressed.resize(sizeof(rawSize) + 1 + outSize);
 	memcpy(compressed.data(), &rawSize, sizeof(rawSize));
 
-	const int ret = compress2(
-		reinterpret_cast<Bytef*>(compressed.data() + sizeof(rawSize)), &bound,
-		reinterpret_cast<const Bytef*>(raw.data()), raw.size(),
-		level
-	);
+	SRes res = Lzma2Enc_SetProps(enc, &props);
 
-	if (ret != Z_OK) {
+	if (res == SZ_OK) {
+		Lzma2Enc_SetDataSize(enc, rawSize);
+		compressed[sizeof(rawSize)] = static_cast<char>(Lzma2Enc_WriteProperties(enc));
+
+		res = Lzma2Enc_Encode2(enc, nullptr,
+			reinterpret_cast<Byte*>(compressed.data() + sizeof(rawSize) + 1), &outSize,
+			nullptr, reinterpret_cast<const Byte*>(raw.data()), raw.size(),
+			nullptr
+		);
+	}
+
+	Lzma2Enc_Destroy(enc);
+
+	if (res != SZ_OK) {
 		compressed.clear();
 		return false;
 	}
 
-	compressed.resize(sizeof(rawSize) + bound);
+	compressed.resize(sizeof(rawSize) + 1 + outSize);
 	return true;
 }
 
@@ -88,7 +121,7 @@ bool GameSnapshot::Decompress(const std::string& compressed, std::string& raw, s
 {
 	uint64_t rawSize = 0;
 
-	if (compressed.size() < sizeof(rawSize))
+	if (compressed.size() < (sizeof(rawSize) + 1))
 		return false;
 
 	memcpy(&rawSize, compressed.data(), sizeof(rawSize));
@@ -97,14 +130,18 @@ bool GameSnapshot::Decompress(const std::string& compressed, std::string& raw, s
 		return false;
 
 	raw.resize(rawSize);
-	uLongf destLen = rawSize;
 
-	const int ret = uncompress(
-		reinterpret_cast<Bytef*>(raw.data()), &destLen,
-		reinterpret_cast<const Bytef*>(compressed.data() + sizeof(rawSize)), compressed.size() - sizeof(rawSize)
+	SizeT destLen = rawSize;
+	SizeT srcLen = compressed.size() - sizeof(rawSize) - 1;
+	ELzmaStatus status;
+
+	const SRes res = Lzma2Decode(
+		reinterpret_cast<Byte*>(raw.data()), &destLen,
+		reinterpret_cast<const Byte*>(compressed.data() + sizeof(rawSize) + 1), &srcLen,
+		static_cast<Byte>(compressed[sizeof(rawSize)]), LZMA_FINISH_END, &status, &g_Alloc
 	);
 
-	if (ret != Z_OK || destLen != rawSize) {
+	if (res != SZ_OK || destLen != rawSize || srcLen != (compressed.size() - sizeof(rawSize) - 1)) {
 		raw.clear();
 		return false;
 	}

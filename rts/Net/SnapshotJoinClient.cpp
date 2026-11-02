@@ -25,8 +25,8 @@
 
 CONFIG(bool, SnapshotJoin).defaultValue(false)
 	.description("Ask the server for a snapshot of the game when joining a running game, instead of re-simulating it from its start. The start script can decide per game (GAME\\SnapshotJoin).");
-CONFIG(int, SnapshotCompressionLevel).defaultValue(1).minimumValue(1).maximumValue(9)
-	.description("zlib level used for game snapshots sent to joining clients.");
+CONFIG(int, SnapshotCompressionLevel).defaultValue(1).minimumValue(0).maximumValue(9)
+	.description("LZMA2 level used for game snapshots sent to joining clients.");
 
 CSnapshotJoinClient snapshotJoinClient;
 

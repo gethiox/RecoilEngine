@@ -164,7 +164,7 @@ start script still have to wait, as anyone could connect with their name.
 | `SnapshotJoinMinSources` | server | `1` | fewer suitable clients: catch up instead |
 | `SnapshotJoinTimeout` | server | `60` | seconds without progress until falling back to catch-up |
 | `SnapshotTransferRate` | both | 4 MiB/s | rate of snapshot uploads and joiner downloads |
-| `SnapshotCompressionLevel` | source | `1` | zlib level |
+| `SnapshotCompressionLevel` | source | `1` | LZMA2 level |
 
 ## Limitations
 
@@ -175,10 +175,12 @@ start script still have to wait, as anyone could connect with their name.
   supported.
 * Unsynced Lua (widgets, unsynced gadget parts) starts fresh on the joining
   client, like after `/luaui reload`.
-* Snapshots are large (about 55 MB compressed in a 4-player game on a small
-  map, most of it path finder and height map data); they are sent at up to
-  `SnapshotTransferRate`, limited by the provider's upload and the server's
-  bandwidth.
+* Snapshots are large: about 195 MB uncompressed in a 4-player game on a
+  small map, most of it path finder and height map data. They are compressed
+  with LZMA2 (about 15 MB, zlib gave 55 MB) in a background thread on the
+  sources, which takes several seconds and about 450 MB of memory, and sent
+  at up to `SnapshotTransferRate`, limited by the provider's upload and the
+  server's bandwidth.
 * A player without a password in the start script who restarted the game
   (e.g. after a crash) can only rejoin once the old connection was silent for
   `ReconnectTimeout`, like before; see "Rejoining after a crash".
