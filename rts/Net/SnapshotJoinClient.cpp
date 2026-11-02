@@ -2,6 +2,7 @@
 
 #include "SnapshotJoinClient.h"
 
+#include <algorithm>
 #include <cstring>
 
 #include "Game/Game.h"
@@ -49,7 +50,14 @@ bool CSnapshotJoinClient::WantsSnapshotJoin(int scriptValue)
 
 void CSnapshotJoinClient::Reset()
 {
-	StopUpload();
+	// the game ends anyway, so waiting for a running compression is acceptable
+	// (a std::async future blocks on destruction, detaching is not an option)
+	StopUpload(true);
+
+	for (auto& f: abandoned)
+		f.wait();
+
+	abandoned.clear();
 
 	if (joinState == JoinState::PLAYING && !history.complete)
 		LOG_L(L_WARNING, "[SnapshotJoin] the game ended before its history was received (%u of %u bytes), the demo is incomplete", history.receivedSize, history.expectedSize);
@@ -163,6 +171,12 @@ void CSnapshotJoinClient::HandlePreGamePacket(std::shared_ptr<const netcode::Raw
 			frameNum, GameSnapshot::DigestToHex(digest).c_str(), (spring_gettime() - t0).toSecsf());
 	} catch (const netcode::UnpackPacketException& ex) {
 		LOG_L(L_ERROR, "[SnapshotJoin] invalid snapshot packet: %s", ex.what());
+		incoming = {};
+	} catch (const std::bad_alloc&) {
+		LOG_L(L_ERROR, "[SnapshotJoin] out of memory while receiving the snapshot, catching up instead");
+		incoming = {};
+	} catch (const std::exception& ex) {
+		LOG_L(L_ERROR, "[SnapshotJoin] unusable snapshot (%s), catching up instead", ex.what());
 		incoming = {};
 	}
 }
@@ -348,7 +362,7 @@ void CSnapshotJoinClient::HandleServerHash(std::shared_ptr<const netcode::RawPac
 
 	if (upload != nullptr && upload->requestID == requestID) {
 		LOG("[SnapshotJoin] request %d aborted by the server", requestID);
-		StopUpload();
+		StopUpload(false);
 	}
 }
 
@@ -391,24 +405,32 @@ void CSnapshotJoinClient::CreateSnapshot(uint8_t requestID, uint8_t role, int32_
 	upload->frameNum = gs->frameNum;
 	upload->playerNum = uint8_t(gu->myPlayerNum);
 
-	// compression and hashing happen in the background
+	// hashing (and for the provider the compression) happen in the background;
+	// the digest is of the raw snapshot, so verifiers do not compress at all
 	const int level = configHandler->GetInt("SnapshotCompressionLevel");
-	upload->pending = std::async(std::launch::async, [raw = std::move(raw), level]() {
+	const bool compress = (role == SNAPSHOT_ROLE_PROVIDER);
+
+	upload->pending = std::async(std::launch::async, [raw = std::move(raw), level, compress]() {
 		Upload::Result r;
 		r.digest = GameSnapshot::Hash(raw);
-		r.ok = GameSnapshot::Compress(raw, r.compressed, level) && r.compressed.size() <= MAX_SNAPSHOT_SIZE;
+		r.ok = !compress || (GameSnapshot::Compress(raw, r.compressed, level) && r.compressed.size() <= MAX_SNAPSHOT_SIZE);
 		return r;
 	});
 }
 
 void CSnapshotJoinClient::Update()
 {
+	using namespace std::chrono_literals;
+
+	// drop finished compressions of aborted requests
+	abandoned.erase(std::remove_if(abandoned.begin(), abandoned.end(), [](const std::future<Upload::Result>& f) {
+		return (f.wait_for(0ms) == std::future_status::ready);
+	}), abandoned.end());
+
 	if (upload == nullptr)
 		return;
 
 	if (upload->pending.valid()) {
-		using namespace std::chrono_literals;
-
 		if (upload->pending.wait_for(0ms) != std::future_status::ready)
 			return;
 
@@ -423,8 +445,12 @@ void CSnapshotJoinClient::Update()
 		const uint8_t status = u.result.ok ? SNAPSHOT_STATUS_OK : SNAPSHOT_STATUS_FAILED;
 		SendHash(u.requestID, status, u.frameNum, uint32_t(u.result.compressed.size()), u.result.digest);
 
-		LOG("[SnapshotJoin] request %d: digest %s, %.1f MB compressed", u.requestID,
-			GameSnapshot::DigestToHex(u.result.digest).c_str(), u.result.compressed.size() / (1024.0f * 1024.0f));
+		if (u.role == SNAPSHOT_ROLE_PROVIDER) {
+			LOG("[SnapshotJoin] request %d: digest %s, %.1f MB compressed", u.requestID,
+				GameSnapshot::DigestToHex(u.result.digest).c_str(), u.result.compressed.size() / (1024.0f * 1024.0f));
+		} else {
+			LOG("[SnapshotJoin] request %d: digest %s", u.requestID, GameSnapshot::DigestToHex(u.result.digest).c_str());
+		}
 
 		if (!u.result.ok || u.role != SNAPSHOT_ROLE_PROVIDER) {
 			upload.reset();
@@ -440,7 +466,7 @@ void CSnapshotJoinClient::Update()
 		return;
 
 	LOG("[SnapshotJoin] request %d: snapshot uploaded", u.requestID);
-	StopUpload();
+	StopUpload(true);
 }
 
 void CSnapshotJoinClient::UploadLoop(Upload& u)
@@ -475,13 +501,19 @@ void CSnapshotJoinClient::UploadLoop(Upload& u)
 	u.done = true;
 }
 
-void CSnapshotJoinClient::StopUpload()
+void CSnapshotJoinClient::StopUpload(bool waitForCompression)
 {
 	if (upload == nullptr)
 		return;
 
-	if (upload->pending.valid())
-		upload->pending.wait();
+	if (upload->pending.valid()) {
+		// the compression runs for several seconds; an aborted request must
+		// not stall this client (and with it the game) for that long
+		if (waitForCompression)
+			upload->pending.wait();
+		else
+			abandoned.push_back(std::move(upload->pending));
+	}
 
 	if (upload->thread.joinable()) {
 		upload->stop = true;

@@ -77,6 +77,9 @@ std::vector<int> CSnapshotJoinServer::SelectSources(const GameParticipant& joine
 			continue;
 		if (p.myState != GameParticipant::INGAME || p.isReconn || p.awaitingSnapshot || p.desynced)
 			continue;
+		// a client creates one snapshot at a time
+		if (IsSource(p.id))
+			continue;
 		if ((server->serverFrameNum - p.lastFrameResponse) > MAX_SOURCE_LAG)
 			continue;
 
@@ -333,6 +336,14 @@ void CSnapshotJoinServer::Verify(Join& join)
 		}
 
 		numConfirmations++;
+	}
+
+	// the provider counts as one source; verifiers that failed (or left) do not
+	const int minSources = configHandler->GetInt("SnapshotJoinMinSources");
+
+	if ((numConfirmations + 1) < minSources) {
+		Abort(join, spring::format("only %d of the required %d source(s) confirmed the snapshot", numConfirmations + 1, minSources));
+		return;
 	}
 
 	join.verified = true;

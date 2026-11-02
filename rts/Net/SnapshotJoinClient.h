@@ -11,6 +11,7 @@
 #include <memory>
 #include <string>
 #include <thread>
+#include <vector>
 
 class ILoadSaveHandler;
 class CGame;
@@ -127,10 +128,13 @@ private:
 	};
 
 	static void UploadLoop(Upload& u);
-	void StopUpload();
+	/// stops the upload; an unfinished compression is only waited for if asked to
+	void StopUpload(bool waitForCompression);
 
 	std::map<uint8_t, uint8_t> assignedRoles;
 	std::unique_ptr<Upload> upload;
+	/// compressions of aborted requests, finishing in the background (dropped once done)
+	std::vector<std::future<Upload::Result>> abandoned;
 };
 
 extern CSnapshotJoinClient snapshotJoinClient;
