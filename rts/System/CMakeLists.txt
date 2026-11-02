@@ -85,6 +85,7 @@ if    (NO_CREG)
 	make_global_var(sources_engine_System_creg )
 else  (NO_CREG)
 	make_global_var(sources_engine_System_creg
+			"${CMAKE_CURRENT_SOURCE_DIR}/creg/CanonicalLuaState.cpp"
 			"${CMAKE_CURRENT_SOURCE_DIR}/creg/SerializeLuaState.cpp"
 			"${CMAKE_CURRENT_SOURCE_DIR}/creg/Serializer.cpp"
 			"${CMAKE_CURRENT_SOURCE_DIR}/creg/VarTypes.cpp"
