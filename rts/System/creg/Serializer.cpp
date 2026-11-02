@@ -124,6 +124,11 @@ void creg::WriteUInt(std::ostream* stream, uint64_t val)
 	WriteVarSizeUInt(stream, val);
 }
 
+static bool skipUnsyncedMembers = false;
+
+void creg::SetSkipUnsyncedMembers(bool skip) { skipUnsyncedMembers = skip; }
+bool creg::IsSkippingUnsyncedMembers() { return skipUnsyncedMembers; }
+
 //-------------------------------------------------------------------------
 // Base output serializer
 //-------------------------------------------------------------------------
@@ -161,7 +166,7 @@ void COutputStreamSerializer::SerializeObject(Class* c, void* ptr, ObjectRef* ob
 	for (uint a = 0; a < c->members.size(); a++)
 	{
 		creg::Class::Member* m = &c->members[a];
-		if (m->flags & CM_NoSerialize)
+		if ((m->flags & CM_NoSerialize) || ((m->flags & CM_Unsynced) && skipUnsyncedMembers))
 			continue;
 
 		ObjectMember om;
@@ -440,7 +445,7 @@ void CInputStreamSerializer::SerializeObject(Class* c, void* ptr)
 	for (uint a = 0; a < c->members.size(); a++)
 	{
 		creg::Class::Member* m = &c->members[a];
-		if (m->flags & CM_NoSerialize)
+		if ((m->flags & CM_NoSerialize) || ((m->flags & CM_Unsynced) && skipUnsyncedMembers))
 			continue;
 
 		const unsigned oldPos = stream->tellg();

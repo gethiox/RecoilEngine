@@ -61,7 +61,7 @@ CR_REG_METADATA(CSolidObject,
 
 	CR_MEMBER(localModel),
 	CR_MEMBER(collisionVolume),
-	CR_MEMBER(selectionVolume), // unsynced, could also be ignored
+	CR_MEMBER_UNSYNCED(selectionVolume), // unsynced, could also be ignored
 	CR_MEMBER(hitModelPieces),
 
 	CR_MEMBER(frontdir),
@@ -77,8 +77,8 @@ CR_REG_METADATA(CSolidObject,
 
 	CR_MEMBER(dragScales),
 
-	CR_MEMBER(drawPos),
-	CR_MEMBER(drawMidPos),
+	CR_MEMBER_UNSYNCED(drawPos),
+	CR_MEMBER_UNSYNCED(drawMidPos),
 
 	CR_MEMBER(buildFacing),
 	CR_MEMBER(modParams),

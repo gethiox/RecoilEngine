@@ -21,6 +21,10 @@ namespace creg {
 	 * Usage: create an instance of this class and call SavePackage
 	 * @see SavePackage
 	 */
+	/// whether members flagged CM_Unsynced are skipped (by both reading and writing serializers)
+	void SetSkipUnsyncedMembers(bool skip);
+	bool IsSkippingUnsyncedMembers();
+
 	class COutputStreamSerializer : public ISerializer
 	{
 	protected:

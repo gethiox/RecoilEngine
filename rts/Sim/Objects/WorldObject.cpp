@@ -16,9 +16,9 @@ CR_REG_METADATA(CWorldObject, (
 	CR_MEMBER(buildeeRadius),
 	CR_MEMBER(height),
 	CR_MEMBER(sqRadius),
-	CR_MEMBER(drawRadius),
-	CR_MEMBER(drawFlag),
-	CR_MEMBER(previousDrawFlag),
+	CR_MEMBER_UNSYNCED(drawRadius),
+	CR_MEMBER_UNSYNCED(drawFlag),
+	CR_MEMBER_UNSYNCED(previousDrawFlag),
 	CR_MEMBER(preFrameTra),
 	// the projectile system needs to know that 'pos' and 'speed' are accessible by script
 	CR_MEMBER_BEGINFLAG(CM_Config),

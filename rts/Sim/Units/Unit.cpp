@@ -3004,7 +3004,7 @@ CR_REG_METADATA(CUnit, (
 	CR_MEMBER_UN(leaveTracks),
 
 	CR_MEMBER_UN(isSelected),
-	CR_MEMBER(iconRadius),
+	CR_MEMBER_UNSYNCED(iconRadius),
 
 	CR_MEMBER(stunned),
 	CR_MEMBER_UN(noGroup),
