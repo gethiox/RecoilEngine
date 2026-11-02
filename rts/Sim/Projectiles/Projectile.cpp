@@ -89,7 +89,7 @@ CProjectile::CProjectile(
 	bool isWeapon,
 	bool isPiece,
 	bool isHitScan
-): CExpGenSpawnable(pos, spd)
+): CExpGenSpawnable(pos, spd, isSynced)
 
 	, synced(isSynced)
 	, weapon(isWeapon)

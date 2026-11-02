@@ -34,6 +34,14 @@ public:
 		SetVelocity(spd);
 	}
 
+	/// see CObject::IsSynced
+	explicit CWorldObject(bool syncedObject): CObject(syncedObject) {}
+	CWorldObject(const float3& pos, const float3& spd, bool syncedObject): CWorldObject(syncedObject)
+	{
+		SetPosition(pos);
+		SetVelocity(spd);
+	}
+
 	virtual ~CWorldObject() {}
 
 	// NOTE: used only by projectiles, SolidObject's override this!

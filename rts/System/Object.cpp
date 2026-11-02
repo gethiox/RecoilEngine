@@ -21,6 +21,7 @@ CR_REG_METADATA(CObject, (
 ))
 
 std::atomic<std::int64_t> CObject::cur_sync_id(0);
+std::atomic<std::int64_t> CObject::cur_unsynced_id(0);
 
 
 
@@ -44,6 +45,16 @@ CObject::CObject() : detached(false)
 
 	// Use atomic fetch-and-add, so threads don't read half written data nor write old (= smaller) numbers
 	sync_id = ++cur_sync_id;
+
+	assert((sync_id + 1) > sync_id); // check for overflow
+}
+
+CObject::CObject(bool syncedObject) : detached(false)
+{
+	// unsynced objects (e.g. visual effects) are created depending on client
+	// settings; drawing their ids from the synced counter would make synced
+	// ids differ between clients (their order would still be the same)
+	sync_id = syncedObject ? (++cur_sync_id) : (UNSYNCED_ID_BASE + (++cur_unsynced_id));
 
 	assert((sync_id + 1) > sync_id); // check for overflow
 }

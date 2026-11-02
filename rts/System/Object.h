@@ -20,6 +20,13 @@ public:
 	CObject();
 	virtual ~CObject();
 
+	/**
+	 * Whether this object is part of the synced simulation. Unsynced objects
+	 * (visual effects) get sync-ids from a separate range, so synced objects
+	 * get identical ids on every client.
+	 */
+	virtual bool IsSynced() const { return true; }
+
 	/// Request to not inform this when obj dies
 	virtual void DeleteDeathDependence(CObject* obj, DependenceType dep);
 	/// Request to inform this when obj dies
@@ -81,6 +88,14 @@ private:
 	// Its only purpose is to make the sorting in TSyncSafeSet syncsafe
 	std::int64_t sync_id;
 	static std::atomic<std::int64_t> cur_sync_id;
+	static std::atomic<std::int64_t> cur_unsynced_id;
+
+protected:
+	/// for derived classes that know whether they are synced at construction
+	explicit CObject(bool syncedObject);
+
+	/// unsynced objects sort after all synced ones
+	static constexpr std::int64_t UNSYNCED_ID_BASE = std::int64_t(1) << 62;
 
 public:
 	typedef std::vector<CObject*> TSyncSafeSet;

@@ -45,8 +45,8 @@ CR_REG_METADATA(CExpGenSpawnable, (
 
 decltype(CExpGenSpawnable::spawnables) CExpGenSpawnable::spawnables = {};
 
-CExpGenSpawnable::CExpGenSpawnable(const float3& pos, const float3& spd)
-	: CWorldObject(pos, spd)
+CExpGenSpawnable::CExpGenSpawnable(const float3& pos, const float3& spd, bool syncedObject)
+	: CWorldObject(pos, spd, syncedObject)
 	, rotVal{ 0 }
 	, rotVel{ 0 }
 	, createFrame{ 0 }
@@ -55,8 +55,9 @@ CExpGenSpawnable::CExpGenSpawnable(const float3& pos, const float3& spd)
 	assert(projMemPool.alloced(this));
 }
 
+// default-constructed spawnables are created by explosion generators: visual only
 CExpGenSpawnable::CExpGenSpawnable()
-	: CWorldObject()
+	: CWorldObject(false)
 	, rotVal{ 0 }
 	, rotVel{ 0 }
 	, createFrame{ 0 }
