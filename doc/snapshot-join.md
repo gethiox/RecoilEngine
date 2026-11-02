@@ -69,14 +69,19 @@ Details:
   after it. This also works while the game is paused.
 * Role assignments are sent before the marker on the same ordered link. Other
   clients and replays ignore markers they were not assigned to.
-* Sources serialize synchronously (the only stall), then compress and hash in
-  a background thread and upload in the background.
+* Sources serialize synchronously (the only stall), then hash in a background
+  thread; the provider also compresses there and uploads in the background.
+  The digest is of the uncompressed snapshot, so verifiers never compress. A
+  client that is already creating a snapshot is not selected again; a request
+  the server aborts never makes a source wait for its running compression.
 * All bulk transfers (snapshot upload and relay, catch-up, history) are flow
   controlled: at most 32 kB are queued or unacknowledged on a link, so regular
   game packets are never stuck behind bulk data, and the reliable UDP protocol
   stays within its resend window (256 chunks).
 * The server only reports success after every verifier's digest equals the
-  provider's. The joiner checks the digest again after decompressing.
+  provider's and at least `SnapshotJoinMinSources` sources (the provider plus
+  confirming verifiers) stand behind the snapshot; verifiers that failed or
+  left do not count. The joiner checks the digest again after decompressing.
 * Snapshot transfers and the data sent to a joiner use `SnapshotTransferRate`
   instead of the regular per-link bandwidth limit, and snapshot packets are
   exempt from the server's anti-spam limits.
@@ -94,7 +99,9 @@ what lets verifiers confirm the provider's snapshot by digest:
 
 * client specific data is excluded or stored as neutral values: local player
   identity, UI settings and caches, control groups, rendering data, native AI
-  data, members marked `CR_MEMBER_UNSYNCED` (e.g. draw positions);
+  data, members marked `CR_MEMBER_UNSYNCED` (draw positions, feature fade
+  values, cached model piece transforms, the local player's input statistics,
+  icons and selection volumes set by widgets, visual smoke trails);
 * unsynced objects (visual-effect projectiles, lights, the local selection)
   are left out, including every reference to them, and get sync-ids from a
   separate range so synced objects get identical ids everywhere;
@@ -107,9 +114,11 @@ what lets verifiers confirm the provider's snapshot by digest:
 Loading keeps the joining client's identity and unsynced settings. Nothing is
 recomputed on load: everything the simulation depends on is stored exactly,
 including derived data that is updated lazily or paced over frames (height
-map derivatives, LOS, path finder, smooth height mesh) and the storage order
-of every container that is iterated (hash maps, Lua tables, ECS storages);
-see the "Savegame:" commits.
+map derivatives, LOS, path finder, smooth height mesh, explosions still
+deforming the terrain, terrain type properties changed by Lua) and the
+storage order of every container that is iterated (hash maps, Lua tables, ECS
+storages); see the "Savegame:" commits. Unsynced data a joining client needs
+(selection volumes, piece transforms) is re-initialized on load.
 
 ## Opting in
 
@@ -192,7 +201,12 @@ start script still have to wait, as anyone could connect with their name.
 * `run_integrity.py` - reference game vs. a game saved and loaded at a frame:
   per-frame sync checksums, byte comparison of the saved and the loaded state
   (`--compare-state`) and state dumps around a divergence (`--dump`);
-  `--snapshot` saves and loads a game snapshot (`.srs`) instead of a saved game
+  `--snapshot` saves and loads a game snapshot (`.srs`) instead of a saved game.
+  Run it at an early *and* at a late, busy point of the game: a divergence can
+  stay invisible to the sync checksums until the affected state is used (e.g.
+  the synced RNG is drawn by every weapon but only matters once one fires).
+  The config `SimStateTestDumpRNGFrames "first last"` logs every synced random
+  number drawn in those frames, also right after a load
 * `compare_states.py` - attributes differences between two states to the
   responsible class members
 * `diagnose_first_frame.sh` - compares full states one frame after loading
