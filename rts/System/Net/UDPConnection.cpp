@@ -708,8 +708,8 @@ void UDPConnection::Flush(const bool forced)
 
 	const spring_time curTime = spring_gettime();
 
-	// do not create chunks more than chunksPerSec times per second
-	const bool waitMore = (lastChunkCreatedTime >= (curTime - spring_msecs(1000 / chunksPerSec)));
+	// do not create chunks more than chunksPerSec times per second (except for bulk transfers)
+	const bool waitMore = !hasOutgoingLimitOverride && (lastChunkCreatedTime >= (curTime - spring_msecs(1000 / chunksPerSec)));
 	// if the packet is tiny, reduce the send frequency further
 	const int requiredLength = ((200 >> netLossFactor) - spring_tomsecs(curTime - lastChunkCreatedTime)) / 10;
 
@@ -732,8 +732,8 @@ void UDPConnection::Flush(const bool forced)
 		bool sendMore = true;
 
 		do {
-			sendMore  = (outgoing.GetAverage(true) <= globalConfig.linkOutgoingBandwidth);
-			sendMore |= ((globalConfig.linkOutgoingBandwidth <= 0) || partialPacket || forced);
+			sendMore  = (outgoing.GetAverage(true) <= GetOutgoingLimit());
+			sendMore |= ((GetOutgoingLimit() <= 0) || partialPacket || forced);
 			sendMore &= (partialPacket || (unackedChunks.size() + newChunks.size()) < maxChunksInFlight);
 
 			if (!outgoingData.empty() && sendMore) {
@@ -962,7 +962,7 @@ void UDPConnection::SendIfNecessary(bool flushed)
 	}
 
 
-	while (((outgoing.GetAverage() <= globalConfig.linkOutgoingBandwidth) || (globalConfig.linkOutgoingBandwidth <= 0))) {
+	while (((outgoing.GetAverage() <= GetOutgoingLimit()) || (GetOutgoingLimit() <= 0))) {
 		Packet buf(lastInOrder, nak);
 
 		if (nak > 0) {
@@ -1110,6 +1110,23 @@ void UDPConnection::RequestResend(ChunkPtr ptr, bool noSort)
 }
 
 
+
+int UDPConnection::GetOutgoingLimit() const
+{
+	return hasOutgoingLimitOverride ? outgoingLimitOverride : globalConfig.linkOutgoingBandwidth;
+}
+
+size_t UDPConnection::GetOutgoingQueueBytes() const
+{
+	size_t bytes = 0;
+
+	for (const auto& packet: outgoingData)
+		bytes += packet->length;
+	for (const auto& chunk: unackedChunks)
+		bytes += chunk->data.size();
+
+	return bytes;
+}
 
 void UDPConnection::BandwidthUsage::UpdateTime(unsigned newTime)
 {

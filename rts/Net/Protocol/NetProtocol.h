@@ -86,6 +86,11 @@ public:
 	 * @brief Send a message to the server
 	 */
 	void Send(std::shared_ptr<const netcode::RawPacket> pkt);
+
+	/// see netcode::CConnection; used for bulk transfers (game snapshots)
+	void SetOutgoingBandwidthLimit(int bytesPerSecond);
+	void ResetOutgoingBandwidthLimit();
+	size_t GetOutgoingQueueBytes();
 	/// @overload
 	void Send(const netcode::RawPacket* pkt);
 
@@ -114,7 +119,7 @@ public:
 private:
 	std::atomic<bool> keepUpdating;
 
-	spring::spinlock serverConnMutex;
+	mutable spring::spinlock serverConnMutex;
 
 	uint8_t serverConnMem[1024];
 	uint8_t demoRecordMem[ 512];

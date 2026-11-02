@@ -65,6 +65,21 @@ public:
 	unsigned int GetNumQueuedPings() const { return numPings; }
 	virtual unsigned int GetPacketQueueSize() const { return 0; }
 
+	/**
+	 * Overrides the configured outgoing bandwidth limit of this connection
+	 * (bytes per second, 0 = unlimited), e.g. for bulk transfers like game
+	 * snapshots. ResetOutgoingBandwidthLimit restores the configured limit.
+	 */
+	virtual void SetOutgoingBandwidthLimit(int bytesPerSecond) {}
+	virtual void ResetOutgoingBandwidthLimit() {}
+
+	/**
+	 * Number of bytes queued for sending or sent but not yet acknowledged.
+	 * Bulk senders keep this small: the reliable UDP protocol can only request
+	 * resends within a window of 256 chunks (of up to 254 bytes each).
+	 */
+	virtual size_t GetOutgoingQueueBytes() const { return 0; }
+
 	virtual std::string Statistics() const = 0;
 	virtual std::string GetFullAddress() const = 0;
 	virtual void Unmute() = 0;

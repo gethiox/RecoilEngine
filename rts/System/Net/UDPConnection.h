@@ -81,6 +81,10 @@ public:
 class UDPConnection : public CConnection
 {
 public:
+	void SetOutgoingBandwidthLimit(int bytesPerSecond) override { outgoingLimitOverride = bytesPerSecond; hasOutgoingLimitOverride = true; }
+	void ResetOutgoingBandwidthLimit() override { hasOutgoingLimitOverride = false; }
+	size_t GetOutgoingQueueBytes() const override;
+
 	UDPConnection(std::shared_ptr<asio::ip::udp::socket> netSocket, const asio::ip::udp::endpoint& myAddr);
 	UDPConnection(int sourceport, const std::string& address, const unsigned port);
 	UDPConnection(CConnection& conn);
@@ -185,6 +189,11 @@ private:
 
 	/// outgoing stuff (pure data without header) waiting to be sent
 	std::deque< std::shared_ptr<const RawPacket> > outgoingData;
+
+	/// configured outgoing bandwidth limit unless overridden (see SetOutgoingBandwidthLimit)
+	int GetOutgoingLimit() const;
+	int outgoingLimitOverride = 0;
+	bool hasOutgoingLimitOverride = false;
 	/// packets we have received but not yet read
 	std::vector< std::pair<int, RawPacket> > waitingPackets;
 	spring::unordered_set<int> incomingChunkNums;
