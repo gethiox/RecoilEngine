@@ -36,6 +36,7 @@ CONFIG(int, SimStateTestPauseFrame).defaultValue(-1).description("[test] pause t
 CONFIG(float, SimStateTestPauseSeconds).defaultValue(30.0f).description("[test] unpause the game this many seconds after SimStateTestPauseFrame paused it");
 CONFIG(bool, SimStateTestDisableLuaUI).defaultValue(false).description("[test] do not load LuaUI");
 CONFIG(std::string, SimStateTestDumpFrames).defaultValue("").description("[test] \"first last period\" frames passed to DumpState");
+CONFIG(std::string, SimStateTestDumpRNGFrames).defaultValue("").description("[test] \"first last\" frames passed to DumpRNG (every synced random number drawn)");
 
 namespace {
 	FILE* checksumLog = nullptr;
@@ -84,6 +85,11 @@ void SimStateTestHooks::Init()
 
 	if ((dumpState = (dumpArgs.size() == 3)))
 		DumpState(StringToInt(dumpArgs[0]), StringToInt(dumpArgs[1]), StringToInt(dumpArgs[2]), true, std::nullopt, true);
+
+	const std::vector<std::string> rngArgs = CSimpleParser::Tokenize(configHandler->GetString("SimStateTestDumpRNGFrames"));
+
+	if (rngArgs.size() == 2)
+		DumpRNG(StringToInt(rngArgs[0]), StringToInt(rngArgs[1]), true);
 }
 
 void SimStateTestHooks::Kill()
@@ -102,6 +108,9 @@ bool SimStateTestHooks::IsLuaUIDisabled()
 void SimStateTestHooks::PostLoadGame(int frameNum)
 {
 	LOG("[SimStateTestHooks] loaded game state of frame %d", frameNum);
+
+	// an RNG dump starting at this frame also covers what follows the load
+	DumpRNG(-1, -1);
 
 	// dump the freshly loaded state if requested, so it can be compared with
 	// the reference state recorded at the end of the same frame

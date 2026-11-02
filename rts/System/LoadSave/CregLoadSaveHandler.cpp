@@ -652,13 +652,13 @@ bool CCregLoadSaveHandler::WriteStateForComparison(const std::string& basePath, 
 		TempNumState::ApplyCanonical();
 	}
 
+	bool ok = false;
+
 	try {
 		std::stringstream oss;
 		std::vector<creg::COutputStreamSerializer::LayoutEntry> layout;
 
 		WriteGameState(oss, &layout);
-		localState.Apply();
-		tempNums.Restore();
 
 		const std::string data = oss.str();
 		FILE* stateFile = fopen((basePath + ".state").c_str(), "wb");
@@ -677,14 +677,20 @@ bool CCregLoadSaveHandler::WriteStateForComparison(const std::string& basePath, 
 		if (layoutFile != nullptr)
 			fclose(layoutFile);
 
-		return (stateFile != nullptr && layoutFile != nullptr);
+		ok = (stateFile != nullptr && layoutFile != nullptr);
 	} catch (const std::exception& ex) {
 		LOG_L(L_ERROR, "[LSH::%s] exception \"%s\"", __func__, ex.what());
 	} catch (const std::string& str) {
 		LOG_L(L_ERROR, "[LSH::%s] str error \"%s\"", __func__, str.c_str());
 	}
-#endif
+
+	// also after an error: the client must not keep the canonical identity
+	localState.Apply();
+	tempNums.Restore();
+	return ok;
+#else
 	return false;
+#endif
 }
 
 bool CCregLoadSaveHandler::WriteSnapshot(std::string& raw)

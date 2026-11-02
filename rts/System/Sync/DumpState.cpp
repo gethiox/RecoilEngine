@@ -842,16 +842,20 @@ void DumpState(int newMinFrameNum, int newMaxFrameNum, int newFramePeriod, std::
 	}
 }
 
-void DumpRNG(int newMinFrameNum, int newMaxFrameNum)
+void DumpRNG(int newMinFrameNum, int newMaxFrameNum, bool testRequest)
 {
 	static nowide::fstream file;
 	static int gMinFrameNum = -1;
 	static int gMaxFrameNum = -1;
+	// test harnesses (SimStateTestHooks) may dump without cheats
+	static bool testRequested = false;
 
 	const int oldMinFrameNum = gMinFrameNum;
 	const int oldMaxFrameNum = gMaxFrameNum;
 
-	if (!gs->cheatEnabled)
+	testRequested |= testRequest;
+
+	if (!gs->cheatEnabled && !testRequested)
 		return;
 	// check if the range is valid
 	if (newMaxFrameNum < newMinFrameNum)
