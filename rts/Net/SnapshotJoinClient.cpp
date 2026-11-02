@@ -14,6 +14,7 @@
 #include "Sim/Misc/GlobalSynced.h"
 #include "Sim/Path/IPathManager.h"
 #include "System/Config/ConfigHandler.h"
+#include "System/EventHandler.h"
 #include "System/LoadSave/CregLoadSaveHandler.h"
 #include "System/LoadSave/DemoRecorder.h"
 #include "System/LoadSave/GameSnapshot.h"
@@ -285,9 +286,11 @@ void CSnapshotJoinClient::AddHistoryPacket(const uint8_t* data, uint32_t length,
 			if (CDemoRecorder* record = clientNet->GetDemoRecorder(); record != nullptr)
 				record->SetGameID(&data[1]);
 
-			// no GameID callin: synced gadgets react to it, their effects are
-			// part of the snapshot (e.g. BAR exposes the id as a rules param)
+			// synced handlers reacted to the id at game start (e.g. BAR reseeds
+			// the synced RNG and exposes the id as a rules param), their effects
+			// are part of the snapshot; unsynced handlers started fresh and get it
 			memcpy(game->gameID, &data[1], sizeof(game->gameID));
+			eventHandler.GameID(game->gameID, sizeof(game->gameID), true);
 		} break;
 
 		default: {

@@ -557,7 +557,11 @@ void CGame::ClientReadNet()
 
 			case NETMSG_RANDSEED: {
 				ZoneScopedN("Net::RandSeed");
-				gsRNG.SetSeed(*((uint32_t*)&inbuf[1]), true);
+				// sent once at game start and replayed to every later connection;
+				// a game loaded from a saved state (or snapshot) continues with
+				// the generator state it restored instead
+				if (!IsSavedGame())
+					gsRNG.SetSeed(*((uint32_t*)&inbuf[1]), true);
 				AddTraffic(-1, packetCode, dataLength);
 			} break;
 
@@ -577,7 +581,8 @@ void CGame::ClientReadNet()
 						p[ 8], p[ 9], p[10], p[11], p[12], p[13], p[14], p[15]);
 
 				AddTraffic(-1, packetCode, dataLength);
-				eventHandler.GameID(gameID, sizeof(gameID));
+				// replayed to every new connection: a loaded game already contains the synced effects
+				eventHandler.GameID(gameID, sizeof(gameID), IsSavedGame());
 			} break;
 
 			case NETMSG_PATH_CHECKSUM: {

@@ -59,7 +59,8 @@ class CEventHandler
 		void GamePaused(int playerID, bool paused);
 		void GameFrame(int gameFrame);
 		void GameFramePost(int gameFrame);
-		void GameID(const unsigned char* gameID, unsigned int numBytes);
+		/// unsyncedOnly: the synced effects of the id are already part of a loaded game state
+		void GameID(const unsigned char* gameID, unsigned int numBytes, bool unsyncedOnly = false);
 
 		void TeamDied(int teamID);
 		void TeamChanged(int teamID);
