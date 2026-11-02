@@ -27,6 +27,13 @@ using namespace asio;
 static constexpr unsigned udpMaxPacketSize = 4096;
 static constexpr int maxChunkSize = 254;
 static constexpr int chunksPerSec = 30;
+// a receiver can only request resends (naks) of chunks up to 255 chunks after
+// its last in-order chunk; new packets are not split into chunks while this
+// many are unacknowledged (a packet that was started is always completed)
+static constexpr size_t maxChunksInFlight = 192;
+// acknowledge this many received chunks without waiting for other data to send,
+// so the sender of a bulk transfer does not wait for its window to open
+static constexpr int ackChunksThreshold = maxChunksInFlight / 4;
 
 
 
@@ -277,6 +284,7 @@ void UDPConnection::Init()
 	#endif
 
 	lastInOrder = -1;
+	lastAckSent = -1;
 	waitingPackets.clear();
 	waitingPackets.reserve(256);
 	incomingChunkNums.clear();
@@ -726,6 +734,7 @@ void UDPConnection::Flush(const bool forced)
 		do {
 			sendMore  = (outgoing.GetAverage(true) <= globalConfig.linkOutgoingBandwidth);
 			sendMore |= ((globalConfig.linkOutgoingBandwidth <= 0) || partialPacket || forced);
+			sendMore &= (partialPacket || (unackedChunks.size() + newChunks.size()) < maxChunksInFlight);
 
 			if (!outgoingData.empty() && sendMore) {
 				std::shared_ptr<const RawPacket>& packet = *(outgoingData.begin());
@@ -906,8 +915,9 @@ void UDPConnection::SendIfNecessary(bool flushed)
 	const bool flushSend = (flushed || !newChunks.empty());
 	const bool otherSend = (UseMinLossFactor() && !resendRequested.empty());
 	const bool unackSend = (nak > 0) || (difTime > (unackTime * 0.5f));
+	const bool ackSend = ((lastInOrder - lastAckSent) >= ackChunksThreshold);
 
-	if (!flushSend && !otherSend && !unackSend)
+	if (!flushSend && !otherSend && !unackSend && !ackSend)
 		return;
 
 	int maxResend = resendRequested.size();
@@ -1052,6 +1062,7 @@ void UDPConnection::SendPacket(Packet& pkt)
 
 	outgoing.DataSent(sendBuffer.size());
 	lastPacketSendTime = spring_gettime();
+	lastAckSent = pkt.lastContinuous;
 
 	ip::udp::socket::message_flags flags = 0;
 	asio::error_code err;

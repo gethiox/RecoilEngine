@@ -217,6 +217,8 @@ private:
 #endif
 
 	int lastInOrder;
+	/// lastInOrder as sent in our last packet
+	int lastAckSent;
 	int lastNak;
 
 	/// Our socket
