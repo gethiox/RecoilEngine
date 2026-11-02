@@ -111,6 +111,32 @@ map derivatives, LOS, path finder, smooth height mesh) and the storage order
 of every container that is iterated (hash maps, Lua tables, ECS storages);
 see the "Savegame:" commits.
 
+## Opting in
+
+Joining from a snapshot is opt-in for the joining client, re-simulating the
+game stays the default and is always the fallback:
+
+* the start script that connects the client decides per game, so a lobby can
+  offer it as an option when rejoining:
+  ```
+  [game] { hostip=...; myplayername=...; mypasswd=...; snapshotjoin=1; }
+  ```
+* without that entry the `SnapshotJoin` config decides (default off).
+
+The server offers snapshots unless `AllowSnapshotJoin` is off; every synced
+client can be asked to provide one, regardless of its own `SnapshotJoin`.
+
+## Rejoining after a crash
+
+A player whose game crashed is still connected as far as the server is
+concerned, until the connection timed out. Previously a new connection of
+that player was rejected until the old one had been silent for
+`ReconnectTimeout` (15 s, or the whole `NetworkTimeout` if the client gave
+up before). Now a client that connects with the player's password replaces
+the old connection at once (`RejoinReplacesConnection`, server, default on):
+the newest connection of a player wins. Players without a password in the
+start script still have to wait, as anyone could connect with their name.
+
 ## Joining client
 
 1. `CPreGame` receives the snapshot before its player number, verifies and
@@ -131,8 +157,9 @@ see the "Savegame:" commits.
 
 | key | side | default | |
 |---|---|---|---|
-| `SnapshotJoin` | client | `true` | ask for a snapshot when joining a running game |
+| `SnapshotJoin` | client | `false` | ask for a snapshot when joining a running game (opt-in); the start script's `GAME\SnapshotJoin` overrides it per game |
 | `AllowSnapshotJoin` | server | `true` | offer snapshots to joining clients |
+| `RejoinReplacesConnection` | server | `true` | a player's new connection (correct password) replaces the old one at once |
 | `SnapshotJoinSources` | server | `3` | clients asked (1 provider + verifiers) |
 | `SnapshotJoinMinSources` | server | `1` | fewer suitable clients: catch up instead |
 | `SnapshotJoinTimeout` | server | `60` | seconds without progress until falling back to catch-up |
@@ -152,8 +179,9 @@ see the "Savegame:" commits.
   map, most of it path finder and height map data); they are sent at up to
   `SnapshotTransferRate`, limited by the provider's upload and the server's
   bandwidth.
-* A client that crashed can only rejoin once the server noticed that its old
-  connection is gone (`NetworkTimeout`), like before.
+* A player without a password in the start script who restarted the game
+  (e.g. after a crash) can only rejoin once the old connection was silent for
+  `ReconnectTimeout`, like before; see "Rejoining after a crash".
 
 ## Testing
 
@@ -167,8 +195,9 @@ see the "Savegame:" commits.
   responsible class members
 * `diagnose_first_frame.sh` - compares full states one frame after loading
 * `run_mp_join.py` - end-to-end test: dedicated server, two players (one
-  hosting two Lua AIs), a spectator; one player leaves (or is killed,
-  `--kill`) and rejoins from a snapshot (also as spectator,
+  hosting two Lua AIs), a spectator; one player leaves (or is killed and
+  restarts at once, `--kill`) and rejoins from a snapshot, opting in through
+  the start script (also as spectator,
   `--bob-spectator`, or while the game is paused, `--pause`). Checks: the
   joiner simulated no frame before the snapshot and every frame after it
   matches the other clients; the snapshots of different sources are
@@ -204,8 +233,10 @@ own folders:
    cache, demos, infolog); `SPRING_DATADIR` is only read.
 
 Every client of a game needs this engine. The game is hosted with
-`spring-dedicated.exe` (or one of the clients) as usual; a client that
-reconnects to the running game asks for a snapshot. Its `infolog.txt`
+`spring-dedicated.exe` (or one of the clients) as usual. A client that
+reconnects to the running game asks for a snapshot if its start script has
+`snapshotjoin=1;` in the `[game]` section (or with `SnapshotJoin = 1` in its
+`springsettings.cfg`). Its `infolog.txt`
 shows `[SnapshotJoin]` lines, the host's log shows which clients provided and
 verified it.
 
