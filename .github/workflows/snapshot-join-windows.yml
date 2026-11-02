@@ -30,6 +30,10 @@ jobs:
           fetch-depth: 0
           submodules: recursive
           path: src
+      - name: Fetch release tags
+        # the engine version is derived from the latest release tag (git
+        # describe), forks usually do not have the upstream tags
+        run: git -C src fetch --no-recurse-submodules --tags https://github.com/beyond-all-reason/RecoilEngine.git
       - name: Build
         run: |
           source src/docker-build-v2/images_versions.sh
