@@ -3108,8 +3108,11 @@ unsigned CGameServer::BindConnection(
 	if (newPlayer.isMidgameJoin)
 		clientLink->SendData(CBaseNetProtocol::Get().SendCreateNewPlayer(newPlayerNumber, newPlayer.spectator, newPlayer.team, newPlayer.name));
 
-	// there is an open link -> reconnect
-	if (newPlayer.clientLink != nullptr) {
+	// there is an open link and the client continues its session from another
+	// address -> reconnect; a new client (e.g. restarted right after quitting,
+	// while the old link still delivers the quit message) gets a new link and
+	// Connected() closes the old one
+	if (newPlayer.clientLink != nullptr && reconnect) {
 		newPlayer.clientLink->ReconnectTo(*clientLink);
 
 		if (udpListener != nullptr)
