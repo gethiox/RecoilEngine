@@ -4,6 +4,7 @@
 
 #include "Projectile.h"
 #include "ProjectileHandler.h"
+#include "System/creg/Serializer.h"
 #include "ProjectileMemPool.h"
 #include "Game/GlobalUnsynced.h"
 #include "Game/TraceRay.h"
@@ -52,7 +53,7 @@ CONFIG(int, MaxNanoParticles).defaultValue(2000).headlessValue(0).minimumValue(0
 
 CR_BIND(CProjectileHandler, )
 CR_REG_METADATA(CProjectileHandler, (
-	CR_MEMBER(projectiles),
+	CR_IGNORED(projectiles), // see Serialize
 	CR_MEMBER_UN(flyingPieces),
 	CR_MEMBER_UN(groundFlashes),
 	CR_MEMBER_UN(resortFlyingPieces),
@@ -61,8 +62,26 @@ CR_REG_METADATA(CProjectileHandler, (
 	CR_MEMBER(maxNanoParticles),
 	CR_MEMBER(currentNanoParticles),
 	CR_MEMBER_UN(frameCurrentParticles),
-	CR_MEMBER_UN(frameProjectileCounts)
+	CR_MEMBER_UN(frameProjectileCounts),
+
+	CR_SERIALIZER(Serialize)
 ))
+
+
+void CProjectileHandler::Serialize(creg::ISerializer* s)
+{
+	const auto type = creg::DeduceType<std::remove_reference_t<decltype(projectiles[0])>>::Get();
+
+	// unsynced (visual) projectiles are client specific and not part of game snapshots
+	if (creg::IsSkippingUnsyncedMembers()) {
+		std::remove_reference_t<decltype(projectiles[0])> none;
+		type->Serialize(s, &none);
+	} else {
+		type->Serialize(s, &projectiles[false]);
+	}
+
+	type->Serialize(s, &projectiles[true]);
+}
 
 
 

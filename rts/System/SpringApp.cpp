@@ -746,7 +746,7 @@ void SpringApp::Startup()
 		LoadDemoFile(inputFile);
 		return;
 	}
-	if (extension == "slsf" || extension == "ssf") {
+	if (extension == "slsf" || extension == "ssf" || extension == "srs") {
 		LoadSaveFile(inputFile);
 		return;
 	}

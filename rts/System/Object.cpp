@@ -4,6 +4,8 @@
 #include "System/Object.h"
 #include "System/ContainerUtil.h"
 #include "System/creg/STL_Map.h"
+#include "System/creg/Serializer.h"
+#include <algorithm>
 #include "System/Log/ILog.h"
 #include "System/Platform/CrashHandler.h"
 
@@ -14,14 +16,68 @@ CR_REG_METADATA(CObject, (
 
 	CR_MEMBER(detached),
 
-	CR_MEMBER(listening),
-	CR_MEMBER(listeners),
-	CR_MEMBER(listenersDepTbl),
-	CR_MEMBER(listeningDepTbl)
+	// see Serialize
+	CR_IGNORED(listening),
+	CR_IGNORED(listeners),
+	CR_IGNORED(listenersDepTbl),
+	CR_IGNORED(listeningDepTbl),
+	CR_SERIALIZER(Serialize)
 ))
 
 std::atomic<std::int64_t> CObject::cur_sync_id(0);
 std::atomic<std::int64_t> CObject::cur_unsynced_id(0);
+
+
+void CObject::Serialize(creg::ISerializer* s)
+{
+	const auto mapType = creg::DeduceType<TDependenceMap>::Get();
+	const auto tblType = creg::DeduceType<TDependenceTable>::Get();
+
+	if (s->IsWriting() && creg::IsSkippingUnsyncedMembers()) {
+		// snapshots have to be identical on every client and must not refer to
+		// unsynced objects; the order of the dependence lists and empty lists
+		// only depend on which (possibly unsynced) objects were added before,
+		// and do not influence the simulation: keep only the synced objects,
+		// one list per dependence type in ascending order
+		const auto Canonical = [](const TDependenceMap& depMap, const TDependenceTable& depTbl, TDependenceMap& outMap, TDependenceTable& outTbl) {
+			// the unsynced dependence types are last, only unsynced objects use them
+			for (std::underlying_type_t<DependenceType> dt = 0; dt < DEPENDENCE_LIGHT; ++dt) {
+				const auto it = depTbl.find(dt);
+
+				if (it == depTbl.end())
+					continue;
+
+				TSyncSafeSet objs = depMap[it->second];
+				objs.erase(std::remove_if(objs.begin(), objs.end(), [](const CObject* o) { return !o->IsSynced(); }), objs.end());
+
+				if (objs.empty())
+					continue;
+
+				outTbl[dt] = outMap.size();
+				outMap.emplace_back(std::move(objs));
+			}
+		};
+
+		TDependenceMap canonListening;
+		TDependenceMap canonListeners;
+		TDependenceTable canonListeningTbl;
+		TDependenceTable canonListenersTbl;
+
+		Canonical(listening, listeningDepTbl, canonListening, canonListeningTbl);
+		Canonical(listeners, listenersDepTbl, canonListeners, canonListenersTbl);
+
+		mapType->Serialize(s, &canonListening);
+		mapType->Serialize(s, &canonListeners);
+		tblType->Serialize(s, &canonListenersTbl);
+		tblType->Serialize(s, &canonListeningTbl);
+		return;
+	}
+
+	mapType->Serialize(s, &listening);
+	mapType->Serialize(s, &listeners);
+	tblType->Serialize(s, &listenersDepTbl);
+	tblType->Serialize(s, &listeningDepTbl);
+}
 
 
 
@@ -34,7 +90,6 @@ static bool VectorEraseSorted(std::vector<CObject*>& v, CObject* o)
 {
 	return (spring::VectorEraseUniqueSorted(v, o, [](const CObject* a, const CObject* b) { return (a->GetSyncID() < b->GetSyncID()); }));
 }
-
 
 
 CObject::CObject() : detached(false)

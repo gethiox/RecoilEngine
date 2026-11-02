@@ -1,6 +1,7 @@
 /* This file is part of the Spring engine (GPL v2 or later), see LICENSE.html */
 
 #include <cstdio>
+#include <memory>
 #include <sstream>
 #include <vector>
 #include <zlib.h>
@@ -8,6 +9,7 @@
 #include "ExternalAI/SkirmishAIHandler.h"
 #include "ExternalAI/EngineOutHandler.h"
 #include "CregLoadSaveHandler.h"
+#include "GameSnapshot.h"
 #include "Map/ReadMap.h"
 #include "Game/Game.h"
 #include "Game/GameSetup.h"
@@ -36,6 +38,9 @@
 #include "Sim/MoveTypes/MoveDefHandler.h"
 #include "Sim/Misc/TeamHandler.h"
 #include "Sim/Misc/GlobalSynced.h"
+#include "Sim/Projectiles/Projectile.h"
+#include "Sim/Units/Unit.h"
+#include "Sim/Weapons/Weapon.h"
 #include "Sim/Path/IPathManager.h"
 #include "Sim/Units/CommandAI/BuilderCaches.h"
 #include "System/creg/STL_Set.h"
@@ -50,6 +55,8 @@
 #include "System/SafeUtil.h"
 #include "System/Platform/errorhandler.h"
 #include "System/FileSystem/DataDirsAccess.h"
+#include "System/FileSystem/FileHandler.h"
+#include "System/FileSystem/FileSystem.h"
 #include "System/FileSystem/FileQueryFlags.h"
 #include "System/FileSystem/GZFileHandler.h"
 #include "System/Threading/ThreadPool.h"
@@ -159,7 +166,8 @@ void CGameStateCollector::Serialize(creg::ISerializer* s)
 	// messages processed by every client at the same frame, i.e. they are
 	// synced state queried by game code
 	s->SerializeObjectInstance(&playerHandler, playerHandler.GetClass());
-	for (int a = 0; a < teamHandler.ActiveTeams(); a++) {
+	// control groups are client specific
+	for (int a = 0; a < teamHandler.ActiveTeams() && !GameSnapshot::IsActive(); a++) {
 		s->SerializeObjectInstance(&uiGroupHandlers[a], uiGroupHandlers[a].GetClass());
 	}
 	s->SerializeObjectInstance(&commandDescriptionCache, commandDescriptionCache.GetClass());
@@ -179,6 +187,10 @@ void CGameStateCollector::Serialize(creg::ISerializer* s)
 
 	if (exactPathing)
 		pathManager->SerializeState(s);
+
+	// rendering data is client specific; a joining client starts without it
+	if (GameSnapshot::IsActive())
+		return;
 
 	s->SerializeObjectInstance(CUnitDrawer::modelDrawerData->GetSavedData(), CUnitDrawer::modelDrawerData->GetSavedData()->GetClass());
 	s->SerializeObjectInstance(groundDecals, groundDecals->GetClass());
@@ -239,7 +251,12 @@ void CLuaStateCollector::Read(const CSplitLuaHandle* handle) {
 	 * just a regular Lua table. So just a shallow copy is sufficient. */
 	delayedCallsByFrame = handle->syncedLuaHandle.delayedCallsByFrame;
 
-	lua_gc(L_GC, LUA_GCCOLLECT, 0);
+	// snapshots have to be equal on every client
+	if (GameSnapshot::IsActive()) {
+		creg::MakeCanonicalLuaState(L, L_GC);
+	} else {
+		lua_gc(L_GC, LUA_GCCOLLECT, 0);
+	}
 }
 
 void CLuaStateCollector::Write(CSplitLuaHandle* handle) {
@@ -301,6 +318,164 @@ static void SaveLuaState(CSplitLuaHandle* handle, creg::COutputStreamSerializer&
 }
 
 
+namespace {
+	/**
+	 * Members of serialized objects that are specific to the local client.
+	 * Snapshots store neutral values (so equal synced states give equal
+	 * snapshots) and loading a snapshot keeps the local values.
+	 */
+	struct LocalClientState {
+		// CGlobalUnsynced
+		float modGameTime = 0.0f;
+		float gameTime = 0.0f;
+		float startTime = 0.0f;
+		int myPlayerNum = 0;
+		int myTeam = 0;
+		int myAllyTeam = 0;
+		int myPlayingTeam = -1;
+		int myPlayingAllyTeam = -1;
+		bool spectating = false;
+		bool spectatingFullView = false;
+		bool spectatingFullSelect = false;
+
+		// CGame
+		int lastSimFrame = -1;
+		float totalGameTime = 0.0f;
+		bool hideInterface = false;
+		bool showFPS = false;
+		bool showClock = false;
+		bool showSpeed = false;
+		bool noSpectatorChat = false;
+		int speedControl = 0;
+		int luaGCControl = 0;
+
+		static LocalClientState Capture() {
+			LocalClientState l;
+			l.modGameTime = gu->modGameTime;
+			l.gameTime = gu->gameTime;
+			l.startTime = gu->startTime;
+			l.myPlayerNum = gu->myPlayerNum;
+			l.myTeam = gu->myTeam;
+			l.myAllyTeam = gu->myAllyTeam;
+			l.myPlayingTeam = gu->myPlayingTeam;
+			l.myPlayingAllyTeam = gu->myPlayingAllyTeam;
+			l.spectating = gu->spectating;
+			l.spectatingFullView = gu->spectatingFullView;
+			l.spectatingFullSelect = gu->spectatingFullSelect;
+
+			l.lastSimFrame = game->lastSimFrame;
+			l.totalGameTime = game->totalGameTime;
+			l.hideInterface = game->hideInterface;
+			l.showFPS = game->showFPS;
+			l.showClock = game->showClock;
+			l.showSpeed = game->showSpeed;
+			l.noSpectatorChat = game->noSpectatorChat;
+			l.speedControl = game->speedControl;
+			l.luaGCControl = game->luaGCControl;
+			return l;
+		}
+
+		void Apply() const {
+			gu->modGameTime = modGameTime;
+			gu->gameTime = gameTime;
+			gu->startTime = startTime;
+			gu->myPlayerNum = myPlayerNum;
+			gu->myTeam = myTeam;
+			gu->myAllyTeam = myAllyTeam;
+			gu->myPlayingTeam = myPlayingTeam;
+			gu->myPlayingAllyTeam = myPlayingAllyTeam;
+			gu->spectating = spectating;
+			gu->spectatingFullView = spectatingFullView;
+			gu->spectatingFullSelect = spectatingFullSelect;
+
+			game->lastSimFrame = lastSimFrame;
+			game->totalGameTime = totalGameTime;
+			game->hideInterface = hideInterface;
+			game->showFPS = showFPS;
+			game->showClock = showClock;
+			game->showSpeed = showSpeed;
+			game->noSpectatorChat = noSpectatorChat;
+			game->speedControl = speedControl;
+			game->luaGCControl = luaGCControl;
+		}
+	};
+}
+
+namespace {
+	/**
+	 * "Already processed" stamps (CGlobalSynced::GetTempNum, GetMtTempNum) are
+	 * only compared for equality with the value of a running query; between
+	 * frames none is running, so every stored stamp is equivalent to any value
+	 * below the next counter value. Their actual values also depend on unsynced
+	 * queries (e.g. from widgets), so snapshots store canonical ones: counters 0,
+	 * stamps -1. Loading a snapshot continues the joining client's own counters,
+	 * which are above every stamp it may still have in scratch data.
+	 */
+	class TempNumState {
+	public:
+		void Capture() {
+			counters = gs->GetTempNumCounters();
+			stamps.clear();
+			repulserStamps.clear();
+
+			ForEachObject([this](CWorldObject* o) { stamps.push_back({o->tempNum, o->mtTempNum}); });
+			ForEachRepulser([this](CPlasmaRepulser* r) { repulserStamps.push_back(r->tempNum); });
+		}
+
+		void Restore() const {
+			gs->SetTempNumCounters(counters);
+
+			size_t i = 0;
+			ForEachObject([&](CWorldObject* o) { o->tempNum = stamps[i].first; o->mtTempNum = stamps[i].second; i++; });
+			i = 0;
+			ForEachRepulser([&](CPlasmaRepulser* r) { r->tempNum = repulserStamps[i++]; });
+		}
+
+		static void ApplyCanonical() {
+			CGlobalSynced::TempNumCounters c;
+			c.tempNum = 0;
+			c.mtTempNum.fill(0);
+			gs->SetTempNumCounters(c);
+			ResetStamps();
+		}
+
+		/// after loading a snapshot: canonical stamps, local counters
+		void ContinueCounters() const {
+			gs->SetTempNumCounters(counters);
+			ResetStamps();
+		}
+
+	private:
+		static void ResetStamps() {
+			ForEachObject([](CWorldObject* o) { o->tempNum = -1; o->mtTempNum.fill(-1); });
+			ForEachRepulser([](CPlasmaRepulser* r) { r->tempNum = -1; });
+		}
+
+		template<typename F> static void ForEachObject(F&& f) {
+			for (CUnit* u: unitHandler.GetActiveUnits())
+				f(u);
+			for (const int id: featureHandler.GetActiveFeatureIDs())
+				f(featureHandler.GetFeature(id));
+			for (CProjectile* p: projectileHandler.GetActiveProjectiles(true))
+				f(p);
+		}
+
+		template<typename F> static void ForEachRepulser(F&& f) {
+			for (CUnit* u: unitHandler.GetActiveUnits()) {
+				for (CWeapon* w: u->weapons) {
+					if (CPlasmaRepulser* r = dynamic_cast<CPlasmaRepulser*>(w); r != nullptr)
+						f(r);
+				}
+			}
+		}
+
+	private:
+		CGlobalSynced::TempNumCounters counters = {};
+		std::vector<std::pair<int, std::array<int, ThreadPool::MAX_THREADS>>> stamps;
+		std::vector<int> repulserStamps;
+	};
+}
+
 #ifdef USING_CREG
 /// serializes the complete game state (everything after the textual header)
 static void WriteGameState(std::stringstream& oss, std::vector<creg::COutputStreamSerializer::LayoutEntry>* layout)
@@ -333,10 +508,13 @@ static void WriteGameState(std::stringstream& oss, std::vector<creg::COutputStre
 	PrintSize("Game", ((int)oss.tellp()) - gameStart);
 
 
-	// save AI state
+	// save AI state; only the hosting client has it, not part of snapshots
 	const int aiStart = oss.tellp();
 
 	for (const auto& ai: skirmishAIHandler.GetAllSkirmishAIs()) {
+		if (GameSnapshot::IsActive())
+			break;
+
 		std::stringstream aiData;
 		eoh->Save(&aiData, ai.first);
 
@@ -426,16 +604,32 @@ void CCregLoadSaveHandler::SaveGame(const std::string& path)
 #endif //USING_CREG
 }
 
-bool CCregLoadSaveHandler::WriteStateForComparison(const std::string& basePath)
+bool CCregLoadSaveHandler::WriteStateForComparison(const std::string& basePath, bool snapshotMode)
 {
 #ifdef USING_CREG
-	selectedUnitsHandler.ClearSelected();
+	// snapshot mode: exactly what a snapshot contains (to compare snapshots of different clients)
+	if (!snapshotMode)
+		selectedUnitsHandler.ClearSelected();
+
+	const LocalClientState localState = LocalClientState::Capture();
+	std::unique_ptr<GameSnapshot::ScopedActivation> snapshotActivation;
+
+	TempNumState tempNums;
+	tempNums.Capture();
+
+	if (snapshotMode) {
+		snapshotActivation = std::make_unique<GameSnapshot::ScopedActivation>();
+		LocalClientState().Apply();
+		TempNumState::ApplyCanonical();
+	}
 
 	try {
 		std::stringstream oss;
 		std::vector<creg::COutputStreamSerializer::LayoutEntry> layout;
 
 		WriteGameState(oss, &layout);
+		localState.Apply();
+		tempNums.Restore();
 
 		const std::string data = oss.str();
 		FILE* stateFile = fopen((basePath + ".state").c_str(), "wb");
@@ -464,9 +658,95 @@ bool CCregLoadSaveHandler::WriteStateForComparison(const std::string& basePath)
 	return false;
 }
 
+bool CCregLoadSaveHandler::WriteSnapshot(std::string& raw)
+{
+#ifdef USING_CREG
+	const LocalClientState localState = LocalClientState::Capture();
+	TempNumState tempNums;
+	tempNums.Capture();
+	bool ok = false;
+
+	try {
+		GameSnapshot::ScopedActivation active;
+		std::stringstream oss;
+
+		// neutral values for client specific members
+		LocalClientState().Apply();
+		TempNumState::ApplyCanonical();
+
+		WriteString(oss, GameSnapshot::MAGIC);
+		WriteString(oss, SpringVersion::GetSync());
+		WriteString(oss, gameSetup->setupText);
+		WriteString(oss, gameSetup->modName);
+		WriteString(oss, gameSetup->mapName);
+
+		int32_t frameNum = gs->frameNum;
+		oss.write(reinterpret_cast<const char*>(&frameNum), sizeof(frameNum));
+
+		WriteGameState(oss, nullptr);
+		raw = oss.str();
+		ok = true;
+	} catch (const content_error& ex) {
+		LOG_L(L_ERROR, "[LSH::%s] content error \"%s\"", __func__, ex.what());
+	} catch (const std::exception& ex) {
+		LOG_L(L_ERROR, "[LSH::%s] exception \"%s\"", __func__, ex.what());
+	} catch (const std::string& str) {
+		LOG_L(L_ERROR, "[LSH::%s] str error \"%s\"", __func__, str.c_str());
+	}
+
+	localState.Apply();
+	tempNums.Restore();
+	return ok;
+#else
+	return false;
+#endif
+}
+
+bool CCregLoadSaveHandler::LoadSnapshot(std::string&& raw, int32_t& frameNum)
+{
+	GameSnapshot::Header header;
+	const size_t dataOffset = GameSnapshot::ReadHeader(raw, header);
+
+	if (dataOffset == 0) {
+		LOG_L(L_ERROR, "[LSH::%s] invalid snapshot header", __func__);
+		return false;
+	}
+	if (header.syncVersion != SpringVersion::GetSync()) {
+		LOG_L(L_ERROR, "[LSH::%s] snapshot of engine version \"%s\" (local \"%s\")", __func__, header.syncVersion.c_str(), SpringVersion::GetSync().c_str());
+		return false;
+	}
+
+	scriptText = std::move(header.setupText);
+	modName = std::move(header.modName);
+	mapName = std::move(header.mapName);
+	frameNum = header.frameNum;
+	joinMode = true;
+
+	// creg packages refer to absolute stream positions (as written by WriteSnapshot)
+	iss.str(std::move(raw));
+	iss.clear();
+	iss.seekg(dataOffset);
+	return true;
+}
+
 /// loads the data (map&mod-name,setup-script) needed by PreGame
 bool CCregLoadSaveHandler::LoadGameStartInfo(const std::string& path)
 {
+	if (FileSystem::GetExtensionLowerCase(path) == "srs") {
+		// a raw snapshot (see SimStateTestHooks), loaded like a joining client would
+		CFileHandler snapshotFile(dataDirsAccess.LocateFile(FindSaveFile(path)), SPRING_VFS_RAW_FIRST);
+		std::string raw;
+		int32_t frameNum = -1;
+
+		if (!snapshotFile.FileExists() || !snapshotFile.LoadStringData(raw))
+			return false;
+		if (!LoadSnapshot(std::move(raw), frameNum))
+			return false;
+
+		CGameSetup::LoadSavedScript(path, scriptText);
+		return true;
+	}
+
 	CGZFileHandler saveFile(dataDirsAccess.LocateFile(FindSaveFile(path)), SPRING_VFS_RAW_FIRST);
 
 	std::stringbuf* sbuf = iss.rdbuf();
@@ -500,6 +780,17 @@ void CCregLoadSaveHandler::LoadGame()
 {
 #ifdef USING_CREG
 	ENTER_SYNCED_CODE();
+
+	// a joining client keeps its identity and unsynced settings
+	const LocalClientState localState = LocalClientState::Capture();
+	std::unique_ptr<GameSnapshot::ScopedActivation> snapshotActivation;
+	TempNumState localTempNums;
+
+	if (joinMode) {
+		snapshotActivation = std::make_unique<GameSnapshot::ScopedActivation>();
+		localTempNums.Capture();
+	}
+
 	{
 		Sim::LoadComponents(iss);
 
@@ -521,6 +812,11 @@ void CCregLoadSaveHandler::LoadGame()
 		spring::SafeDelete(gsc);
 	}
 
+	if (joinMode) {
+		localState.Apply();
+		localTempNums.ContinueCounters();
+	}
+
 	LEAVE_SYNCED_CODE();
 #else //USING_CREG
 	LOG_L(L_ERROR, "Load failed: creg is disabled");
@@ -532,6 +828,13 @@ void CCregLoadSaveHandler::LoadAIData()
 {
 #ifdef USING_CREG
 	ENTER_SYNCED_CODE();
+
+	// snapshots contain no AI data and the game simply continues (paused or not)
+	if (joinMode) {
+		iss.str("");
+		LEAVE_SYNCED_CODE();
+		return;
+	}
 
 	// load ai state
 	for (const auto& ai: skirmishAIHandler.GetAllSkirmishAIs()) {

@@ -23,9 +23,11 @@ public:
 	/**
 	 * Whether this object is part of the synced simulation. Unsynced objects
 	 * (visual effects) get sync-ids from a separate range, so synced objects
-	 * get identical ids on every client.
+	 * get identical ids on every client, and are left out of game snapshots.
 	 */
 	virtual bool IsSynced() const { return true; }
+
+	void Serialize(creg::ISerializer* s);
 
 	/// Request to not inform this when obj dies
 	virtual void DeleteDeathDependence(CObject* obj, DependenceType dep);
@@ -100,6 +102,8 @@ protected:
 public:
 	typedef std::vector<CObject*> TSyncSafeSet;
 	typedef std::vector<TSyncSafeSet> TDependenceMap;
+	/// maps dependence-type to index into a TDependenceMap
+	typedef spring::unordered_map<std::underlying_type_t<DependenceType>, size_t> TDependenceTable;
 	typedef std::function<bool(const CObject*, int*)> TObjFilterPred;
 
 	bool detached;
@@ -149,8 +153,8 @@ protected:
 	template<size_t N> void FilterListening(const TObjFilterPred& fp, std::array<int, N>& ids) const { FilterDepObjects(listening, fp, ids); }
 
 protected:
-	spring::unordered_map<std::underlying_type_t<DependenceType>, size_t> listenersDepTbl; // maps dependence-type to index into listeners
-	spring::unordered_map<std::underlying_type_t<DependenceType>, size_t> listeningDepTbl; // maps dependence-type to index into listening
+	TDependenceTable listenersDepTbl; // index into listeners
+	TDependenceTable listeningDepTbl; // index into listening
 
 	TDependenceMap listeners;
 	TDependenceMap listening;

@@ -31,6 +31,9 @@ class CProjectileHandler
 	CR_DECLARE_STRUCT(CProjectileHandler)
 
 public:
+	void Serialize(creg::ISerializer* s);
+
+public:
 	void Init();
 	void Kill();
 
