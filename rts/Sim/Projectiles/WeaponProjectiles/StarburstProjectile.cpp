@@ -55,7 +55,7 @@ CR_REG_METADATA(CStarburstProjectile, (
 	CR_MEMBER(turnToTarget),
 
 	CR_MEMBER(tracerParts),
-	CR_MEMBER(smokeTrail)
+	CR_MEMBER_UNSYNCED(smokeTrail) // an unsynced (visual) projectile, recreated when needed
 ))
 
 

@@ -3,6 +3,7 @@
 #include "3DModelPiece.hpp"
 #include "LocalModel.hpp"
 #include "Rendering/GL/myGL.h"
+#include "System/creg/Serializer.h"
 #include "System/Misc/TracyDefs.h"
 
 CR_BIND(LocalModelPiece, )
@@ -12,16 +13,16 @@ CR_REG_METADATA(LocalModelPiece, (
 	CR_MEMBER(scale),
 	CR_MEMBER(dir),
 
-	CR_MEMBER(prevModelSpaceTra),
-	CR_MEMBER(pieceSpaceTra),
-	CR_MEMBER(modelSpaceTra),
-	CR_MEMBER(modelSpaceMat),
+	CR_MEMBER_UNSYNCED(prevModelSpaceTra),
+	CR_MEMBER_UNSYNCED(pieceSpaceTra),
+	CR_MEMBER_UNSYNCED(modelSpaceTra),
+	CR_MEMBER_UNSYNCED(modelSpaceMat),
 
 	CR_MEMBER(colvol),
 
 	CR_IGNORED(wasUpdated),
 	CR_MEMBER(noInterpolation),
-	CR_MEMBER(dirty),
+	CR_MEMBER_UNSYNCED(dirty),
 
 	CR_MEMBER(scriptSetVisible),
 	CR_MEMBER(blockScriptAnims),
@@ -325,4 +326,11 @@ bool LocalModelPiece::GetEmitDirPos(float3& emitPos, float3& emitDir) const
 void LocalModelPiece::PostLoad()
 {
 	wasUpdated = { true };
+
+	// snapshots leave out the cached transforms (which client drew what last
+	// decides when they are refreshed); recompute them from pos, rot and scale
+	if (creg::IsSkippingUnsyncedMembers()) {
+		dirty = true;
+		prevModelSpaceTra = GetModelSpaceTransform();
+	}
 }

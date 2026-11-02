@@ -68,6 +68,7 @@
 #include "System/Matrix44f.h"
 #include "System/SpringMath.h"
 #include "System/creg/DefTypes.h"
+#include "System/creg/Serializer.h"
 #include "System/creg/STL_List.h"
 #include "System/Sound/ISoundChannels.h"
 #include "System/Sync/SyncedPrimitive.h"
@@ -410,6 +411,12 @@ void CUnit::PostInit(const CUnit* builder)
 void CUnit::PostLoad()
 {
 	RECOIL_DETAILED_TRACY_ZONE;
+	// snapshots leave out the (unsynced) selection volume; same as in PreInit
+	if (creg::IsSkippingUnsyncedMembers() && model != nullptr) {
+		selectionVolume = unitDef->selectionVolume;
+		selectionVolume.InitDefault(float4(model->radius, model->height,  xsize * SQUARE_SIZE, zsize * SQUARE_SIZE));
+	}
+
 	UpdateRenderParams();
 	eventHandler.RenderUnitPreCreated(this);
 	eventHandler.RenderUnitCreated(this, isCloaked);
@@ -2992,7 +2999,7 @@ CR_REG_METADATA(CUnit, (
 
 	CR_MEMBER(definedIconName),
 	CR_MEMBER_UN(currentIconIndex),
-	CR_MEMBER(customIconIndex),
+	CR_MEMBER_UNSYNCED(customIconIndex), // set by unsynced Lua (Spring.SetUnitIcon)
 	CR_MEMBER_UN(drawIcon),
 
 	CR_MEMBER(transportedUnits),

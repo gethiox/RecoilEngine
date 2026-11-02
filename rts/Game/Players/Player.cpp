@@ -30,7 +30,7 @@ CR_REG_METADATA(CPlayer, (
 	CR_MEMBER(active),
 	CR_MEMBER(playerNum),
 	CR_IGNORED(ping),
-	CR_MEMBER(currentStats),
+	CR_MEMBER_UNSYNCED(currentStats), // counts the local player's input, other clients learn it only at game end
 	CR_IGNORED(fpsController),
 	CR_MEMBER(modParams),
 	CR_MEMBER(controlledTeams)

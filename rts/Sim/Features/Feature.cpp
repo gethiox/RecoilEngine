@@ -28,6 +28,7 @@
 #include "System/EventHandler.h"
 #include "System/SpringMath.h"
 #include "System/creg/DefTypes.h"
+#include "System/creg/Serializer.h"
 #include "System/Log/ILog.h"
 
 #include "System/Misc/TracyDefs.h"
@@ -39,9 +40,9 @@ CR_REG_METADATA(CFeature, (
 	CR_MEMBER(isRepairingBeforeResurrect),
 	CR_MEMBER(inUpdateQue),
 	CR_MEMBER(deleteMe),
-	CR_MEMBER(alphaFade),
+	CR_MEMBER_UNSYNCED(alphaFade),
 
-	CR_MEMBER(drawAlpha),
+	CR_MEMBER_UNSYNCED(drawAlpha),
 	CR_MEMBER(resurrectProgress),
 	CR_MEMBER(reclaimTime),
 	CR_MEMBER(reclaimLeft),
@@ -59,6 +60,9 @@ CR_REG_METADATA(CFeature, (
 
 	CR_MEMBER(solidOnTop),
 	CR_MEMBER(transMatrix),
+
+	// set by synced Lua (Spring.SetFeatureNoSelect) and read back by it, unlike for units
+	CR_MEMBER(noSelect),
 
 	CR_POSTLOAD(PostLoad)
 ))
@@ -104,6 +108,12 @@ CFeature::~CFeature()
 void CFeature::PostLoad()
 {
 	RECOIL_DETAILED_TRACY_ZONE;
+	// snapshots leave out the (unsynced) selection volume; same as in Initialize
+	if (creg::IsSkippingUnsyncedMembers()) {
+		selectionVolume = def->selectionVolume;
+		selectionVolume.InitDefault(float4(radius, height,  xsize * SQUARE_SIZE, zsize * SQUARE_SIZE));
+	}
+
 	eventHandler.RenderFeaturePreCreated(this);
 	eventHandler.RenderFeatureCreated(this);
 }

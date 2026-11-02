@@ -16,7 +16,7 @@ CR_REG_METADATA(CWorldObject, (
 	CR_MEMBER(buildeeRadius),
 	CR_MEMBER(height),
 	CR_MEMBER(sqRadius),
-	CR_MEMBER_UNSYNCED(drawRadius),
+	CR_MEMBER(drawRadius), // derived from synced data only (model bounds, defs)
 	CR_MEMBER_UNSYNCED(drawFlag),
 	CR_MEMBER_UNSYNCED(previousDrawFlag),
 	CR_MEMBER(preFrameTra),

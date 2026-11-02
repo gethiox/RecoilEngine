@@ -42,7 +42,7 @@ CR_REG_METADATA(CProjectile,
 		CR_MEMBER(drawOrder),
 	CR_MEMBER_ENDFLAG(CM_Config),
 
-	CR_MEMBER(drawPos),
+	CR_MEMBER_UNSYNCED(drawPos), // interpolated by the drawer
 
 	CR_MEMBER(myrange),
 	CR_MEMBER(mygravity),

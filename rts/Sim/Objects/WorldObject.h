@@ -107,7 +107,7 @@ public:
 
 	S3DModel* model = nullptr;
 protected:
-	float drawRadius = 0.0f;    ///< unsynced, used for projectile visibility culling
+	float drawRadius = 0.0f;    ///< used for projectile visibility culling; set from synced data only
 public:
 	std::array<int, ThreadPool::MAX_THREADS> mtTempNum = {};
 };
