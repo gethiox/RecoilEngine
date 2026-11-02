@@ -240,12 +240,14 @@ PacketType CBaseNetProtocol::SendAttemptConnect(
 	const std::string& version,
 	const std::string& platform,
 	int32_t netloss,
-	bool reconnect
+	bool reconnect,
+	bool snapshotJoin
 ) {
 	const uint32_t payloadSize =
 		sizeof(NETWORK_VERSION) +
 		sizeof(static_cast<uint8_t>(netloss)) +
 		sizeof(static_cast<uint8_t>(reconnect)) +
+		sizeof(static_cast<uint8_t>(snapshotJoin)) +
 		(name.size() + 1) +
 		(passwd.size() + 1) +
 		(version.size() + 1) +
@@ -262,7 +264,64 @@ PacketType CBaseNetProtocol::SendAttemptConnect(
 	*packet << platform;
 	*packet << uint8_t(reconnect);
 	*packet << uint8_t(netloss);
+	*packet << uint8_t(snapshotJoin);
 
+	return PacketType(packet);
+}
+
+
+PacketType CBaseNetProtocol::SendSnapshotRequest(uint8_t requestID, uint8_t role, int32_t frameNum)
+{
+	PackPacket* packet = new PackPacket(1 + 1 + 1 + 4, NETMSG_SNAPSHOT_REQUEST);
+	*packet << requestID;
+	*packet << role;
+	*packet << frameNum;
+	return PacketType(packet);
+}
+
+PacketType CBaseNetProtocol::SendSnapshotData(uint8_t requestID, uint8_t playerNum, uint32_t offset, uint32_t totalSize, const uint8_t* data, uint32_t length)
+{
+	const uint32_t headerSize = sizeof(uint8_t) + sizeof(uint16_t);
+	const uint32_t packetSize = headerSize + 1 + 1 + 4 + 4 + length;
+
+	assert(packetSize <= std::numeric_limits<uint16_t>::max());
+
+	PackPacket* packet = new PackPacket(packetSize, NETMSG_SNAPSHOT_DATA);
+	*packet << static_cast<uint16_t>(packetSize);
+	*packet << requestID;
+	*packet << playerNum;
+	*packet << offset;
+	*packet << totalSize;
+	*packet << std::vector<uint8_t>(data, data + length);
+	return PacketType(packet);
+}
+
+PacketType CBaseNetProtocol::SendSnapshotHash(uint8_t requestID, uint8_t playerNum, uint8_t status, int32_t frameNum, uint32_t compressedSize, uint32_t historySize, const uint8_t digest[32])
+{
+	PackPacket* packet = new PackPacket(1 + 1 + 1 + 1 + 4 + 4 + 4 + 32, NETMSG_SNAPSHOT_HASH);
+	*packet << requestID;
+	*packet << playerNum;
+	*packet << status;
+	*packet << frameNum;
+	*packet << compressedSize;
+	*packet << historySize;
+	*packet << std::vector<uint8_t>(digest, digest + 32);
+	return PacketType(packet);
+}
+
+PacketType CBaseNetProtocol::SendSnapshotHistory(uint8_t requestID, uint32_t offset, uint32_t totalSize, const uint8_t* data, uint32_t length)
+{
+	const uint32_t headerSize = sizeof(uint8_t) + sizeof(uint16_t);
+	const uint32_t packetSize = headerSize + 1 + 4 + 4 + length;
+
+	assert(packetSize <= std::numeric_limits<uint16_t>::max());
+
+	PackPacket* packet = new PackPacket(packetSize, NETMSG_SNAPSHOT_HISTORY);
+	*packet << static_cast<uint16_t>(packetSize);
+	*packet << requestID;
+	*packet << offset;
+	*packet << totalSize;
+	*packet << std::vector<uint8_t>(data, data + length);
 	return PacketType(packet);
 }
 
@@ -672,6 +731,10 @@ CBaseNetProtocol::CBaseNetProtocol()
 	proto->AddType(NETMSG_AI_STATE_CHANGED, 4);
 	proto->AddType(NETMSG_GAME_FRAME_PROGRESS, 5);
 	proto->AddType(NETMSG_PING, 1 + (1 + 1 + 4));
+	proto->AddType(NETMSG_SNAPSHOT_REQUEST, 1 + 1 + 1 + 4);
+	proto->AddType(NETMSG_SNAPSHOT_DATA, -2);
+	proto->AddType(NETMSG_SNAPSHOT_HASH, 1 + 1 + 1 + 1 + 4 + 4 + 4 + 32);
+	proto->AddType(NETMSG_SNAPSHOT_HISTORY, -2);
 
 #ifdef SYNCDEBUG
 	proto->AddType(NETMSG_SD_CHKREQUEST, 5);

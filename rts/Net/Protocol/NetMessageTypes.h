@@ -96,9 +96,30 @@ enum NETMSG {
 
 	NETMSG_PING = 78, // uint8_t playerNum, uint8_t pingTag, float localTime
 
+	// snapshot join, see doc/snapshot-join.md; only the marker request is part of the game stream
+	NETMSG_SNAPSHOT_REQUEST = 79, // uint8_t requestID, uint8_t role (SNAPSHOT_ROLE_*), int32_t frameNum (marker only: server frame)
+	NETMSG_SNAPSHOT_DATA    = 80, // uint16_t msgSize, uint8_t requestID, uint8_t playerNum, uint32_t offset, uint32_t totalSize, std::vector<uint8_t> data
+	NETMSG_SNAPSHOT_HASH    = 81, // uint8_t requestID, uint8_t playerNum, uint8_t status (SNAPSHOT_STATUS_*), int32_t frameNum, uint32_t compressedSize, uint32_t historySize, uint8_t digest[32]
+	NETMSG_SNAPSHOT_HISTORY = 82, // uint16_t msgSize, uint8_t requestID, uint32_t offset, uint32_t totalSize, std::vector<uint8_t> data (game packets before the snapshot, for the joiner's demo)
+
 	NETMSG_LAST //max types of netmessages, internal only
 };
 
+
+/// roles of clients asked for a snapshot (NETMSG_SNAPSHOT_REQUEST)
+enum SNAPSHOT_ROLE {
+	SNAPSHOT_ROLE_PROVIDER = 0, // send the snapshot data and its digest
+	SNAPSHOT_ROLE_VERIFIER = 1, // only send the digest
+	SNAPSHOT_ROLE_MARKER   = 2, // broadcast into the game stream: the snapshot point
+};
+
+/// NETMSG_SNAPSHOT_HASH status
+enum SNAPSHOT_STATUS {
+	SNAPSHOT_STATUS_OK          = 0,
+	SNAPSHOT_STATUS_FAILED      = 1, // client could not create the snapshot
+	SNAPSHOT_STATUS_UNSUPPORTED = 2, // e.g. path finder without exact serialization
+	SNAPSHOT_STATUS_ABORTED     = 3, // server to joiner: no snapshot, catch up normally
+};
 
 /// sub-action-types of NETMSG_TEAM
 enum TEAMMSG {
