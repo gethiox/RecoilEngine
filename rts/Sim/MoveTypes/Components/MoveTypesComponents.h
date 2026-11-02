@@ -7,6 +7,9 @@
 #include "System/Ecs/Components/BaseComponents.h"
 #include <System/Threading/ThreadPool.h>
 
+#include <cstdint>
+#include <stdexcept>
+
 class CUnit;
 class CFeature;
 
@@ -33,13 +36,30 @@ struct UnitTrapCheck {
 template<class Archive>
 void serialize(Archive &ar, UnitTrapCheck &c) { ar(c.type, c.id); }
 
-template<class Archive, class Snapshot>
-void serializeComponents(Archive &archive, Snapshot &snapshot) {
-    snapshot
-        .template get<GeneralMoveType>(archive)
-        .template get<GroundMoveType>(archive)
-        .template get<UnitTrapCheck>(archive);
+template<class Archive>
+void serialize(Archive &ar, ChangeHeadingEvent &c) { ar(c.unitId, c.deltaHeading, c.changed); }
+
+template<class Archive>
+void serialize(Archive &ar, ChangeMainHeadingEvent &c) { ar(c.unitId, c.changed); }
+
+template<class Archive>
+void serialize(Archive &ar, UnitMovedEvent &c) {
+    // only ever set and reset within a frame
+    bool moved = c.moved;
+    ar(moved);
+    c.moved = moved;
 }
+
+/// event lists are filled and consumed within GroundMoveSystem::Update, always empty in between
+template<class Archive, class EventList>
+void serializeEmptyEventList(Archive &ar, EventList &c) {
+    std::uint32_t size = c.value.size();
+    ar(size);
+
+    if (size != 0)
+        throw std::runtime_error("[MoveTypes::serializeEmptyEventList] pending move type events");
+}
+
 
 struct YardmapTrapCheckSystemComponent {
 	static constexpr std::size_t page_size = 1;
@@ -55,6 +75,33 @@ ALIAS_COMPONENT_LIST_RESERVE(UnitCollisionEvents, std::vector<UnitCollisionEvent
 ALIAS_COMPONENT_LIST_RESERVE(FeatureCrushEvents, std::vector<FeatureCrushEvent>, UNIT_EVENT_VECTOR_RESERVE);
 ALIAS_COMPONENT_LIST_RESERVE(UnitCrushEvents, std::vector<UnitCrushEvent>, UNIT_EVENT_VECTOR_RESERVE);
 ALIAS_COMPONENT_LIST_RESERVE(FeatureMoveEvents, std::vector<FeatureMoveEvent>, UNIT_EVENT_VECTOR_RESERVE);
+
+template<class Archive> void serialize(Archive &ar, FeatureCollisionEvents &c) { serializeEmptyEventList(ar, c); }
+template<class Archive> void serialize(Archive &ar, UnitCollisionEvents &c) { serializeEmptyEventList(ar, c); }
+template<class Archive> void serialize(Archive &ar, FeatureCrushEvents &c) { serializeEmptyEventList(ar, c); }
+template<class Archive> void serialize(Archive &ar, UnitCrushEvents &c) { serializeEmptyEventList(ar, c); }
+template<class Archive> void serialize(Archive &ar, FeatureMoveEvents &c) { serializeEmptyEventList(ar, c); }
+
+/**
+ * Systems iterate components in storage order, so every storage is saved
+ * (and restored in the same order), also those that only hold transient
+ * per-frame data.
+ */
+template<class Archive, class Snapshot>
+void serializeComponents(Archive &archive, Snapshot &snapshot) {
+    snapshot
+        .template get<GeneralMoveType>(archive)
+        .template get<GroundMoveType>(archive)
+        .template get<UnitTrapCheck>(archive)
+        .template get<ChangeHeadingEvent>(archive)
+        .template get<ChangeMainHeadingEvent>(archive)
+        .template get<UnitMovedEvent>(archive)
+        .template get<FeatureCollisionEvents>(archive)
+        .template get<UnitCollisionEvents>(archive)
+        .template get<FeatureCrushEvents>(archive)
+        .template get<UnitCrushEvents>(archive)
+        .template get<FeatureMoveEvents>(archive);
+}
 
 }
 

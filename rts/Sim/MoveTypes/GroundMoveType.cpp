@@ -561,13 +561,10 @@ void CGroundMoveType::PostLoad()
 	RECOIL_DETAILED_TRACY_ZONE;
 	pathController = GMTDefaultPathController(owner);
 
-	// the path manager restored all paths, ids stay valid
-	if (pathManager->HasExactSerialization()) {
-		if ((uint8_t *)owner->moveType == owner->amtMemBuffer)
-			Connect();
-
+	// the path manager restored all paths, ids stay valid; the ECS components
+	// (see MoveTypes::serializeComponents) were restored as saved as well
+	if (pathManager->HasExactSerialization())
 		return;
-	}
 
 	// legacy: the path manager starts from scratch, saved path ids are stale
 	nextPathId = 0;
