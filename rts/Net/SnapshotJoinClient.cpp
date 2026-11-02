@@ -23,8 +23,8 @@
 #include "System/Net/RawPacket.h"
 #include "System/Net/UnpackPacket.h"
 
-CONFIG(bool, SnapshotJoin).defaultValue(true)
-	.description("Ask the server for a snapshot of the game when joining a running game, instead of re-simulating it from its start.");
+CONFIG(bool, SnapshotJoin).defaultValue(false)
+	.description("Ask the server for a snapshot of the game when joining a running game, instead of re-simulating it from its start. The start script can decide per game (GAME\\SnapshotJoin).");
 CONFIG(int, SnapshotCompressionLevel).defaultValue(1).minimumValue(1).maximumValue(9)
 	.description("zlib level used for game snapshots sent to joining clients.");
 
@@ -37,8 +37,12 @@ static constexpr uint32_t UPLOAD_CHUNK_SIZE = 8 * 1024;
 static constexpr uint32_t MAX_SNAPSHOT_SIZE = 1024u * 1024u * 1024u;
 
 
-bool CSnapshotJoinClient::WantsSnapshotJoin()
+bool CSnapshotJoinClient::WantsSnapshotJoin(int scriptValue)
 {
+	// opt-in: re-simulating the game stays the default
+	if (scriptValue >= 0)
+		return (scriptValue != 0);
+
 	return configHandler->GetBool("SnapshotJoin");
 }
 

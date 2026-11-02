@@ -40,8 +40,9 @@ class CSnapshotJoinClient
 public:
 	using Digest = std::array<uint8_t, 32>;
 
-	/// whether this client asks the server for a snapshot when joining a running game
-	static bool WantsSnapshotJoin();
+	/// whether this client asks the server for a snapshot when joining a running
+	/// game: the start script's GAME\SnapshotJoin if set (>= 0), else the config
+	static bool WantsSnapshotJoin(int scriptValue);
 
 	// --- joining client ---
 

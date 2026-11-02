@@ -57,7 +57,7 @@ void CNetProtocol::InitClient(std::shared_ptr<ClientSetup> clientSetup, const st
 
 	serverConnPtr = new (serverConnMem) netcode::UDPConnection(configHandler->GetInt("SourcePort"), clientSetup->hostIP, clientSetup->hostPort);
 	serverConnPtr->Unmute();
-	serverConnPtr->SendData(CBaseNetProtocol::Get().SendAttemptConnect(userName, userPasswd, clientVersion, clientPlatform, globalConfig.networkLossFactor, false, CSnapshotJoinClient::WantsSnapshotJoin()));
+	serverConnPtr->SendData(CBaseNetProtocol::Get().SendAttemptConnect(userName, userPasswd, clientVersion, clientPlatform, globalConfig.networkLossFactor, false, CSnapshotJoinClient::WantsSnapshotJoin(clientSetup->snapshotJoin)));
 	serverConnPtr->Flush(true);
 
 	LOG("[NetProto::%s] connecting to IP %s on port %i using name %s", __func__, clientSetup->hostIP.c_str(), clientSetup->hostPort, userName.c_str());
