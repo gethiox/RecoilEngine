@@ -1195,6 +1195,7 @@ bool CGame::Update()
 
 	jobDispatcher.Update();
 	clientNet->Update();
+	SimStateTestHooks::Update();
 
 	// When video recording do step by step simulation, so each simframe gets a corresponding videoframe
 	// FIXME: SERVER ALREADY DOES THIS BY ITSELF

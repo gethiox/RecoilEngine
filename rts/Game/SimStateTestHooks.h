@@ -4,6 +4,7 @@
 #define SIM_STATE_TEST_HOOKS_H
 
 #include <cstdint>
+#include <string>
 
 /**
  * @brief Test-only instrumentation used to verify simulation-state integrity.
@@ -17,13 +18,22 @@
  *    "<frame> <checksum>" line per simulated frame
  *  - SimStateTestSaveFrame:   save the game right after this frame was simulated
  *  - SimStateTestSaveName:    name of that save (written to Saves/<name>.ssf)
+ *  - SimStateTestSaveSnapshot: save a raw game snapshot (Saves/<name>.srs)
+ *    instead; the engine can be started with it like with a saved game
  *  - SimStateTestQuitFrame:   quit right after this frame was simulated
  *  - SimStateTestDumpFrames:  "<first> <last> <period>", DumpState() range
  *  - SimStateTestCompareFrame: write the full uncompressed state (plus a
  *    member layout map) after this frame, or right after loading a game
  *    saved at this frame, to compare-<frame>.state/.layout
+ *  - SimStateTestCompareSnapshot: compare states contain exactly the data of
+ *    game snapshots (see GameSnapshot), not of saved games
+ *  - SimStateTestDumpJoinSnapshots: every snapshot this client creates for a
+ *    joining client is also written as snapshot-<frame>.state/.layout, a
+ *    loaded state as loaded-<frame>.state/.layout
  *  - SimStateTestGameSpeed:   request this user speed once the sim runs
  *    (requires a matching MaxSpeed modoption in the start script)
+ *  - SimStateTestPauseFrame:  pause the game right after this frame and
+ *    unpause it SimStateTestPauseSeconds later
  *  - SimStateTestDisableLuaUI: do not load LuaUI (its widgets issue orders at
  *    wall-clock dependent frames, which makes independent runs incomparable)
  */
@@ -38,6 +48,12 @@ namespace SimStateTestHooks {
 
 	/// called by the client right after frame <frameNum> was simulated
 	void PostSimFrame(int frameNum, uint32_t syncChecksum);
+
+	/// called every client update (also while paused)
+	void Update();
+
+	/// called after this client created a snapshot for a joining client
+	void SnapshotCreated(int frameNum, const std::string& snapshot);
 }
 
 #endif // SIM_STATE_TEST_HOOKS_H

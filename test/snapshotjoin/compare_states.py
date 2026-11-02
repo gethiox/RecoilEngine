@@ -87,6 +87,15 @@ def compare_package(name, da, ea, db, eb, max_report):
 	if structural is None and len(ea) != len(eb):
 		structural = min(len(ea), len(eb))
 
+	if not diffs:
+		# custom serializers (<Serialize>) also write data around the members
+		# of nested objects; attribute to the innermost differing entries
+		limit = structural if structural is not None else min(len(ea), len(eb))
+		differing = [ea[i] + (eb[i],) for i in range(limit) if da[ea[i][0]:ea[i][1]] != db[eb[i][0]:eb[i][1]]]
+		for (s, e, n, _) in differing:
+			if not any(s <= s2 and e2 <= e and (s2, e2) != (s, e) for (s2, e2, _, _) in differing):
+				diffs.setdefault(n, []).append(s)
+
 	if not diffs and structural is None:
 		print("  [%s] DIFFERENT outside of recorded members" % name)
 		return 1

@@ -110,6 +110,8 @@ def main():
 	ap.add_argument("--dump", action="store_true", help="on divergence, rerun with DumpState around the diverging frame")
 	ap.add_argument("--compare-state", action="store_true",
 		help="write the full state at the save frame in the saver and right after loading, and compare them member by member")
+	ap.add_argument("--snapshot", action="store_true",
+		help="save and load a game snapshot (as sent to joining clients) instead of a saved game; with --compare-state the snapshot data is compared")
 	ap.add_argument("--speed", type=float, default=1000.0, help="requested game speed (capped by the script's MaxSpeed)")
 	ap.add_argument("--timeout", type=int, default=3600)
 	args = ap.parse_args()
@@ -149,13 +151,16 @@ def main():
 		results.append(compare("ref", ref, "ref2", read_checksums(os.path.join(args.work_dir, "ref2.log")), 0, args.end_frame))
 
 	compare_cfg = {"SimStateTestCompareFrame": args.save_frame} if args.compare_state else {}
+	if args.compare_state and args.snapshot:
+		compare_cfg["SimStateTestCompareSnapshot"] = 1
 
 	save_dir, _ = run_engine(args, "save", script, checksum_cfg("save", dict(compare_cfg, **{
 		"SimStateTestSaveFrame": args.save_frame,
+		"SimStateTestSaveSnapshot": 1 if args.snapshot else 0,
 		"SimStateTestSaveName": "snap"})))
 	results.append(compare("ref", ref, "save", read_checksums(os.path.join(args.work_dir, "save.log")), 0, args.end_frame))
 
-	save_file = os.path.join(save_dir, "Saves", "snap.ssf")
+	save_file = os.path.join(save_dir, "Saves", "snap.srs" if args.snapshot else "snap.ssf")
 	# the save is written asynchronously; the saver ran to completion so it must exist now
 	if not os.path.exists(save_file):
 		log("save file %s was not written" % save_file)
