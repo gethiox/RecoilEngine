@@ -145,7 +145,8 @@ private:
 	void MutePlayer(int playerNum, bool muteChat, bool muteDraw);
 	void ResignPlayer(int playerNum);
 
-	bool CheckPlayerPassword(const int playerNum, const std::string& pw) const;
+	/// requirePassword: only true if the player has a (non-empty) password and pw matches it
+	bool CheckPlayerPassword(const int playerNum, const std::string& pw, bool requirePassword = false) const;
 
 	unsigned BindConnection(
 		std::shared_ptr<netcode::CConnection> clientLink,

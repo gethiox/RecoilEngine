@@ -69,6 +69,7 @@ using netcode::RawPacket;
 
 CONFIG(int, AutohostPort).defaultValue(0).description("Which port should the engine listen on for Autohost interfact connections.");
 CONFIG(int, ServerSleepTime).defaultValue(5).description("Number of milliseconds to sleep per tick for the server thread. Lower values have marginally higher CPU load, while high values can introduce additional latency.");
+CONFIG(bool, RejoinReplacesConnection).defaultValue(true).description("A client that connects with the password of a player whose connection is still open (e.g. after the player's game crashed) replaces that connection at once, instead of being rejected until it timed out. Players without a password still have to wait for ReconnectTimeout.");
 CONFIG(int, SpeedControl).defaultValue(1).minimumValue(1).maximumValue(2)
 	.description("Sets how server adjusts speed according to player's load (CPU), 1: use average, 2: use highest");
 CONFIG(bool, AllowSpectatorJoin).defaultValue(true).dedicatedValue(false).description("allow any unauthenticated clients to join as spectator with any name, name will be prefixed with ~");
@@ -2918,15 +2919,18 @@ void CGameServer::ResignPlayer(const int player)
 }
 
 
-bool CGameServer::CheckPlayerPassword(const int playerNum, const std::string& pw) const
+bool CGameServer::CheckPlayerPassword(const int playerNum, const std::string& pw, bool requirePassword) const
 {
 	if (playerNum >= players.size()) // new player
-		return true;
+		return !requirePassword;
 
 	const auto& opts = players[playerNum].GetAllValues();
 	const auto it = opts.find("password");
 
-	return (it == opts.end() || it->second == pw);
+	if (it == opts.end() || it->second.empty())
+		return !requirePassword;
+
+	return (it->second == pw);
 }
 
 
@@ -3018,8 +3022,15 @@ unsigned CGameServer::BindConnection(
 				return {"Game has already started", false, false};
 			}
 
-			if (!canReconnect || !gp.clientLink->CheckTimeout(-1))
+			if (!canReconnect || !gp.clientLink->CheckTimeout(-1)) {
+				// the player restarted (e.g. after a crash) while the server
+				// still keeps the old connection: the password proves that it
+				// is the same player, the newest connection wins
+				if (!reconnect && configHandler->GetBool("RejoinReplacesConnection") && CheckPlayerPassword(gp.id, clientPassword, true))
+					return {"", true, true};
+
 				return {"User can not reconnect", false, false};
+			}
 
 			if (!reconnect)
 				return {"", true, true};
