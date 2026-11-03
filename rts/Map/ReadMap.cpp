@@ -325,13 +325,13 @@ void CReadMap::PostLoad()
 	// (rendering) copies have to catch up with the loaded heightmap
 	unsyncedHeightMapUpdates.push_back({0, 0, mapDims.mapx, mapDims.mapy});
 
-	// TODO: remove once all of these serialize their own state; until then
-	// they still have to be told that the terrain differs from the map file
-	const SRectangle fullRect = {0, 0, mapDims.mapx, mapDims.mapy};
-	featureHandler.TerrainChanged(fullRect.x1, fullRect.z1, fullRect.x2, fullRect.z2);
-
-	if (!pathManager->HasExactSerialization())
+	// features are restored with their exact positions and update-queue
+	// membership, nothing has to be told that the terrain differs from the
+	// map file; the legacy path finder still has to be
+	if (!pathManager->HasExactSerialization()) {
+		const SRectangle fullRect = {0, 0, mapDims.mapx, mapDims.mapy};
 		pathManager->TerrainChange(fullRect.x1, fullRect.z1, fullRect.x2, fullRect.z2, TERRAINCHANGE_DAMAGE_RECALCULATION);
+	}
 }
 #endif //USING_CREG
 
