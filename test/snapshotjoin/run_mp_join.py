@@ -175,6 +175,9 @@ def main():
 	ap.add_argument("--rejoin-delay", type=int, default=150, help="frames the game runs without bob")
 	ap.add_argument("--speed", type=float, default=4, help="game speed requested by alice")
 	ap.add_argument("--sources", type=int, default=3)
+	ap.add_argument("--min-sources", type=int, default=1, help="server's SnapshotJoinMinSources")
+	ap.add_argument("--rejoin-twice", type=int, default=0,
+	                help="frames after the first rejoin at which bob leaves again and rejoins a second time (both from a snapshot)")
 	ap.add_argument("--bob-spectator", action="store_true", help="bob is a spectator (only spectator sources allowed)")
 	ap.add_argument("--no-snapshot", action="store_true", help="rejoin with classic catch-up (baseline)")
 	ap.add_argument("--kill", action="store_true", help="kill bob (SIGKILL) instead of letting him quit; he rejoins before the server noticed")
@@ -235,7 +238,7 @@ def main():
 		sd = mkdir("server")
 		write(os.path.join(sd, "script.txt"), server_script)
 		write(os.path.join(sd, "springsettings.cfg"),
-		      "AllowSnapshotJoin = %d\nSnapshotJoinSources = %d\nServerRecordDemos = 1\nLogFlushLevel = 0\n" % (0 if args.no_snapshot else 1, args.sources))
+		      "AllowSnapshotJoin = %d\nSnapshotJoinSources = %d\nSnapshotJoinMinSources = %d\nServerRecordDemos = 1\nLogFlushLevel = 0\n" % (0 if args.no_snapshot else 1, args.sources, args.min_sources))
 		server = Proc("server", engine_cmd(args.dedicated, sd, os.path.join(sd, "script.txt")), sd)
 		procs.append(server)
 		time.sleep(2)
@@ -285,9 +288,24 @@ def main():
 		t0 = time.time()
 		# the lobby opts in for this join through the start script; a killed bob
 		# rejoins at once, his new connection replaces the one the server still has
-		bob2, bob2_dir = start_client("Bob", "pb", "bob2", dict(cmp, SimStateTestQuitFrame=args.end_frame, **dump),
+		leave2 = rejoin_frame + args.rejoin_twice
+		bob2, bob2_dir = start_client("Bob", "pb", "bob2", dict(cmp, SimStateTestQuitFrame=(leave2 if args.rejoin_twice else args.end_frame), **dump),
 		                              "" if args.no_snapshot else "snapshotjoin=1;")
 		log("bob rejoining at alice frame %d" % last_frame(os.path.join(alice_dir, "checksums.log")))
+		sessions = [("bob2", bob2_dir)]
+
+		if args.rejoin_twice:
+			# a second leave and rejoin: the sources create a second snapshot, the server runs a second join
+			wait_for(lambda: not bob2.alive(), args.timeout, "bob second leave")
+			log("bob left again at frame %d" % last_frame(os.path.join(bob2_dir, "checksums.log")))
+			wait_for(lambda: last_frame(os.path.join(alice_dir, "checksums.log")) >= leave2 + args.rejoin_delay or not alice.alive(), args.timeout, "alice second rejoin frame")
+			if not alice.alive():
+				raise RuntimeError("the game ended before bob could rejoin a second time")
+			bob3, bob3_dir = start_client("Bob", "pb", "bob3", dict(cmp, SimStateTestQuitFrame=args.end_frame, **dump),
+			                              "" if args.no_snapshot else "snapshotjoin=1;")
+			log("bob rejoining a second time at alice frame %d" % last_frame(os.path.join(alice_dir, "checksums.log")))
+			sessions.append(("bob3", bob3_dir))
+			bob2 = bob3
 
 		for p in (alice, carol, bob2):
 			wait_for(lambda p=p: not p.alive(), args.timeout, p.name + " end")
@@ -301,18 +319,12 @@ def main():
 	ok = True
 	ref = read_checksums(os.path.join(alice_dir, "checksums.log"))
 	car = read_checksums(os.path.join(carol_dir, "checksums.log"))
-	bob = read_checksums(os.path.join(bob2_dir, "checksums.log"))
 
-	with open(os.path.join(bob2_dir, "stdout.txt"), errors="replace") as f:
-		bob_out = f.read()
 	# the dedicated server logs into the isolation (data) dir
 	with open(os.path.join(args.data_dir, "infolog.txt"), errors="replace") as f:
 		server_out = f.read()
 	shutil.copy(os.path.join(args.data_dir, "infolog.txt"), os.path.join(sd, "infolog.txt"))
 
-	for line in bob_out.splitlines():
-		if "[SnapshotJoin]" in line:
-			log("bob: " + line.split("] ", 1)[-1][:160])
 	for line in server_out.splitlines():
 		if "[SnapshotJoin]" in line or "Sync error" in line or "sync" in line.lower() and "error" in line.lower():
 			log("server: " + line.split("] ", 1)[-1][:160])
@@ -323,42 +335,54 @@ def main():
 		log(("PASS" if replaced else "FAIL") + " bob's new connection replaced the one the server still had")
 		ok &= replaced
 
-	joined = re.search(r"continuing the game from the snapshot of frame (\d+)", bob_out)
-	if not args.no_snapshot:
-		log(("PASS" if joined else "FAIL") + " bob joined from a snapshot")
-		ok &= (joined is not None)
+	for session, bob_dir in sessions:
+		bob = read_checksums(os.path.join(bob_dir, "checksums.log"))
 
-		history = re.search(r"received the game history", bob_out) is not None
-		log(("PASS" if history else "FAIL") + " bob received the game history")
-		ok &= history
+		with open(os.path.join(bob_dir, "stdout.txt"), errors="replace") as f:
+			bob_out = f.read()
 
-	if not bob:
-		log("FAIL bob simulated no frames")
-		return 1
+		for line in bob_out.splitlines():
+			if "[SnapshotJoin]" in line:
+				log(session + ": " + line.split("] ", 1)[-1][:160])
 
-	first = min(bob)
-	log("bob simulated frames %d..%d" % (first, max(bob)))
+		joined = re.search(r"continuing the game from the snapshot of frame (\d+)", bob_out)
+		if not args.no_snapshot:
+			log(("PASS" if joined else "FAIL") + " %s joined from a snapshot" % session)
+			ok &= (joined is not None)
+			history = re.search(r"received the game history", bob_out) is not None
+			log(("PASS" if history else "FAIL") + " %s received the game history" % session)
+			ok &= history
 
-	if joined is not None and not args.no_snapshot:
-		marker = int(joined.group(1))
-		if args.pause > 0:
-			# the snapshot was taken while the game was paused (the pause takes effect a few frames later)
-			paused = (rejoin_frame <= marker <= rejoin_frame + 2 * 30)
-			log(("PASS" if paused else "FAIL") + " bob joined the game paused after frame %d (snapshot frame %d)" % (rejoin_frame, marker))
-			ok &= paused
-		# the snapshot covers every frame up to its marker
-		good = (first == marker + 1)
-		log(("PASS" if good else "FAIL") + " bob's first simulated frame %d follows the snapshot frame %d" % (first, marker))
-		ok &= good
+		if not bob:
+			log("FAIL %s simulated no frames" % session)
+			return 1
 
-	for name, other in (("alice", ref), ("carol", car)):
-		common = sorted(set(bob) & set(other))
-		bad = [fr for fr in common if bob[fr] != other[fr]]
-		if bad or not common:
-			log("FAIL bob vs %s: %d of %d common frames differ (first %s)" % (name, len(bad), len(common), bad[0] if bad else None))
-			ok = False
-		else:
-			log("PASS bob vs %s: %d common frames identical (%d..%d)" % (name, len(common), common[0], common[-1]))
+		first = min(bob)
+		log("%s simulated frames %d..%d" % (session, first, max(bob)))
+
+		if joined is not None and not args.no_snapshot:
+			marker = int(joined.group(1))
+			if args.pause > 0 and session == "bob2":
+				# the snapshot was taken while the game was paused (the pause takes effect a few frames later)
+				paused = (rejoin_frame <= marker <= rejoin_frame + 2 * 30)
+				log(("PASS" if paused else "FAIL") + " bob joined the game paused after frame %d (snapshot frame %d)" % (rejoin_frame, marker))
+				ok &= paused
+			# the snapshot covers every frame up to its marker
+			good = (first == marker + 1)
+			log(("PASS" if good else "FAIL") + " %s's first simulated frame %d follows the snapshot frame %d" % (session, first, marker))
+			ok &= good
+
+		for name, other in (("alice", ref), ("carol", car)):
+			common = sorted(set(bob) & set(other))
+			bad = [fr for fr in common if bob[fr] != other[fr]]
+			if bad or not common:
+				log("FAIL %s vs %s: %d of %d common frames differ (first %s)" % (session, name, len(bad), len(common), bad[0] if bad else None))
+				ok = False
+			else:
+				log("PASS %s vs %s: %d common frames identical (%d..%d)" % (session, name, len(common), common[0], common[-1]))
+
+	# the last session is the one checked below (demo, loaded states)
+	bob2_dir = sessions[-1][1]
 
 	def compare_state(name_a, path_a, name_b, path_b, what):
 		if not (os.path.exists(path_a + ".state") and os.path.exists(path_b + ".state")):
@@ -374,15 +398,18 @@ def main():
 
 	if args.compare_snapshots:
 		frames = lambda d: {os.path.basename(f)[len("snapshot-"):-len(".state")] for f in glob.glob(os.path.join(d, "snapshot-*.state"))}
-		common = sorted(frames(alice_dir) & frames(carol_dir), key=int)
+		# a joining spectator only gets spectator sources, so alice writes no snapshot then
+		common = sorted(frames(carol_dir) & (frames(carol_dir) if args.bob_spectator else frames(alice_dir)), key=int)
 		if not common:
-			log("FAIL no join snapshot written by both alice and carol")
+			log("FAIL no join snapshot written by %s" % ("carol" if args.bob_spectator else "both alice and carol"))
 			ok = False
 		for fr in common:
 			base = "snapshot-" + fr
-			ok &= compare_state("alice", os.path.join(alice_dir, base), "carol", os.path.join(carol_dir, base), "join snapshots of frame " + fr)
-			# what bob loaded
-			ok &= compare_state("carol", os.path.join(carol_dir, base), "bob", os.path.join(bob2_dir, "loaded-" + fr), "join snapshot and loaded state of frame " + fr)
+			if not args.bob_spectator:
+				ok &= compare_state("alice", os.path.join(alice_dir, base), "carol", os.path.join(carol_dir, base), "join snapshots of frame " + fr)
+			# what bob loaded (in whichever of his sessions)
+			loaded = [d for (_, d) in sessions if os.path.exists(os.path.join(d, "loaded-" + fr + ".state"))]
+			ok &= compare_state("carol", os.path.join(carol_dir, base), "bob", os.path.join(loaded[0] if loaded else bob2_dir, "loaded-" + fr), "join snapshot and loaded state of frame " + fr)
 
 	if args.check_demo:
 		ok &= check_demo(args, bob2_dir, ref, engine_cmd, mkdir, write)
