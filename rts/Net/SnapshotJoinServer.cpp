@@ -419,6 +419,7 @@ bool CSnapshotJoinServer::SendHistory(Join& join)
 
 		join.historyBuffer.erase(0, length);
 		join.historyOffset += length;
+		join.progressTime = spring_gettime();
 	}
 
 	return (join.historyOffset == join.historySize);
@@ -432,6 +433,17 @@ void CSnapshotJoinServer::Update()
 	for (size_t i = 0; i < joins.size(); ) {
 		Join& join = joins[i];
 		const size_t numJoins = joins.size();
+
+		// a transfer that makes no progress is worth a log line (before it times out)
+		const bool transferring = (join.phase == Phase::HISTORY || join.dataReceived > 0);
+
+		if (transferring && (spring_gettime() - join.progressTime) > spring_secs(5) && (spring_gettime() - join.stallLogTime) > spring_secs(5)) {
+			const GameParticipant& joiner = server->players[join.joinerNum];
+			LOG_L(L_WARNING, "[SnapshotJoin] request %d: no progress for %.0fs (phase %d, received %u of %u, relayed %u, history %u of %u, joiner link queue %u bytes)",
+				join.requestID, (spring_gettime() - join.progressTime).toSecsf(), int(join.phase), join.dataReceived, join.dataTotal, join.relayOffset,
+				join.historyOffset, join.historySize, unsigned((joiner.clientLink != nullptr) ? joiner.clientLink->GetOutgoingQueueBytes() : 0));
+			join.stallLogTime = spring_gettime();
+		}
 
 		switch (join.phase) {
 			case Phase::SNAPSHOT: {

@@ -109,7 +109,8 @@ private:
 
 		bool verified = false;
 		spring_time startTime;
-		spring_time progressTime; // last time a digest or data arrived or data was relayed
+		spring_time progressTime; // last time a digest or data arrived or data was relayed or sent
+		spring_time stallLogTime;
 	};
 
 	std::vector<int> SelectSources(const GameParticipant& joiner) const;

@@ -474,6 +474,8 @@ void CSnapshotJoinClient::UploadLoop(Upload& u)
 	Threading::SetThreadName("snapshot-upload");
 
 	const std::string& data = u.result.compressed;
+	spring_time progressTime = spring_gettime();
+	uint32_t progressOffset = u.offset;
 
 	while (!u.stop) {
 		// flow control: never queue more than a little ahead of regular game packets
@@ -494,6 +496,15 @@ void CSnapshotJoinClient::UploadLoop(Upload& u)
 
 		if (u.offset == data.size() && clientNet->GetOutgoingQueueBytes() == 0)
 			break;
+
+		if (u.offset != progressOffset) {
+			progressOffset = u.offset;
+			progressTime = spring_gettime();
+		} else if ((spring_gettime() - progressTime) > spring_secs(5)) {
+			LOG_L(L_WARNING, "[SnapshotJoin] request %d: upload makes no progress (%u of %u bytes queued, %u bytes in the link's queue)",
+				u.requestID, u.offset, unsigned(data.size()), unsigned(clientNet->GetOutgoingQueueBytes()));
+			progressTime = spring_gettime();
+		}
 
 		spring_msecs(2).sleep(true);
 	}
