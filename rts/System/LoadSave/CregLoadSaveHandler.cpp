@@ -94,6 +94,9 @@ CR_REG_METADATA(CGameStateCollector, (
 ))
 
 
+static uint32_t loadedChecksum = 0;
+static uint32_t loadedPrevChecksum = 0;
+
 /// synced state that lives outside of any creg-registered object
 static void SerializeSyncedGlobals(creg::ISerializer* s)
 {
@@ -158,10 +161,12 @@ static void SerializeSyncedGlobals(creg::ISerializer* s)
 
 	CObject::RaiseCurrentSyncID(curSyncID);
 	gsRNG.SetFullState(rngState);
-#ifdef SYNCCHECK
-	CSyncChecker::SetChecksum(checksum);
-	CSyncChecker::SetPrevChecksum(prevChecksum);
-#endif
+
+	// restored once everything is loaded: constructing objects with synced
+	// members (e.g. SyncedFloat3) feeds the checksum, so anything created
+	// after this point would leave the loaded game with a different one
+	loadedChecksum = checksum;
+	loadedPrevChecksum = prevChecksum;
 }
 
 void CGameStateCollector::Serialize(creg::ISerializer* s)
@@ -851,6 +856,12 @@ void CCregLoadSaveHandler::LoadGame()
 		localState.Apply();
 		localTempNums.ContinueCounters();
 	}
+
+#ifdef SYNCCHECK
+	// see SerializeSyncedGlobals
+	CSyncChecker::SetChecksum(loadedChecksum);
+	CSyncChecker::SetPrevChecksum(loadedPrevChecksum);
+#endif
 
 	LEAVE_SYNCED_CODE();
 #else //USING_CREG
