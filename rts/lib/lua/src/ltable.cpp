@@ -326,6 +326,11 @@ static void resize (lua_State *L, Table *t, int nasize, int nhsize) {
 }
 
 
+void luaH_resize (lua_State *L, Table *t, int nasize, int nhsize) {
+  resize(L, t, nasize, nhsize);
+}
+
+
 void luaH_resizearray (lua_State *L, Table *t, int nasize) {
   int nsize = (t->node == dummynode) ? 0 : sizenode(t);
   resize(L, t, nasize, nsize);
