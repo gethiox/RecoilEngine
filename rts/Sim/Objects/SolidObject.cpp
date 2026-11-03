@@ -91,6 +91,11 @@ CSolidObject::CSolidObject()
 	: creationFrame { gs->frameNum }
 {}
 
+CSolidObject::CSolidObject(bool syncedObject)
+	: CWorldObject(syncedObject)
+	, creationFrame { gs->frameNum }
+{}
+
 void CSolidObject::PostLoad()
 {
 	RECOIL_DETAILED_TRACY_ZONE;

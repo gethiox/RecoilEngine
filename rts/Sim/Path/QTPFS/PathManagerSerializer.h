@@ -7,6 +7,7 @@
 #include "Path.h"
 
 class CSolidObject;
+#include <unordered_set>
 
 namespace creg {
 	class ISerializer;
@@ -70,6 +71,8 @@ namespace QTPFS {
 
 	private:
 		PathManager& pm;
+		/// units alive while writing; path owners outside of it were destroyed (see IoOwner)
+		std::unordered_set<const CSolidObject*> liveOwners;
 	};
 }
 

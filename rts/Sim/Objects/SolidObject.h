@@ -125,6 +125,8 @@ public:
 	};
 
 	CSolidObject();
+	/// for objects outside of the synced simulation (they get unsynced sync-ids)
+	explicit CSolidObject(bool syncedObject);
 	virtual ~CSolidObject() {}
 
 	void PostLoad();

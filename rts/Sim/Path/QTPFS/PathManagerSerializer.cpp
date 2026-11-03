@@ -119,18 +119,49 @@ void PathManagerSerializer::IoPathNode(creg::RawArchive& ar, IPath::PathNodeData
 	ar.Value(n.badNode);
 }
 
+namespace {
+	/**
+	 * Stands in for path owners that were destroyed while their path still
+	 * existed ("units can get wiped without triggering a delete", see
+	 * PathManager.cpp). The path manager only reads objectUsable from such
+	 * owners, so the joining client behaves like the source, which still holds
+	 * the destroyed unit's pointer. An unsynced object: it must not consume a
+	 * synced sync-id on the joining client.
+	 */
+	class DeadPathOwner: public CSolidObject {
+	public:
+		DeadPathOwner(): CSolidObject(false) { objectUsable = false; }
+
+		void ForcedMove(const float3& newPos) override {}
+		CMatrix44f GetTransformMatrix(bool synced = false, bool fullread = false) const override { return CMatrix44f(); }
+	};
+
+	const CSolidObject* GetDeadPathOwner()
+	{
+		static DeadPathOwner* owner = nullptr;
+
+		if (owner == nullptr)
+			owner = new DeadPathOwner();
+
+		return owner;
+	}
+
+	constexpr int NO_OWNER = -1;
+	constexpr int DEAD_OWNER = -2;
+}
+
 void PathManagerSerializer::IoOwner(creg::RawArchive& ar, const CSolidObject*& owner)
 {
-	int unitID = -1;
+	int unitID = NO_OWNER;
 
 	if (ar.IsWriting() && owner != nullptr) {
+		// the pointer is only dereferenced if the unit is known to be alive;
 		// path requests always come from units
-		const CUnit* unit = dynamic_cast<const CUnit*>(owner);
-
-		if (unit == nullptr)
-			throw content_error("[QTPFS::PathManagerSerializer] path owner is not a unit");
-
-		unitID = unit->id;
+		if (liveOwners.find(owner) != liveOwners.end()) {
+			unitID = static_cast<const CUnit*>(owner)->id;
+		} else {
+			unitID = DEAD_OWNER;
+		}
 	}
 
 	ar.Value(unitID);
@@ -139,6 +170,11 @@ void PathManagerSerializer::IoOwner(creg::RawArchive& ar, const CSolidObject*& o
 		return;
 
 	owner = nullptr;
+
+	if (unitID == DEAD_OWNER) {
+		owner = GetDeadPathOwner();
+		return;
+	}
 
 	if (unitID < 0)
 		return;
@@ -488,7 +524,14 @@ void PathManagerSerializer::Serialize(creg::ISerializer* s)
 {
 	creg::RawArchive ar(s);
 
+	liveOwners.clear();
+
 	if (ar.IsWriting()) {
+		for (unsigned int i = 0; i < unitHandler.MaxUnits(); i++) {
+			if (const CUnit* unit = unitHandler.GetUnit(i); unit != nullptr)
+				liveOwners.insert(unit);
+		}
+
 		// staged results of in-flight searches have to be complete before
 		// they can be stored; this does not change the outcome, the next
 		// frame would wait for the very same task
