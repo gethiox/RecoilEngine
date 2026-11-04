@@ -23,7 +23,8 @@ into its demo, so its local replay is complete.
   spectator never stalls a player.
 * **Never worse than before.** Every failure (no source, timeout,
   disconnect, digest mismatch, unsupported path finder, the joiner hosting a
-  native AI) falls back to the classic catch-up.
+  native AI, unit/weapon/feature defs edited by Lua during the game) falls
+  back to the classic catch-up.
 * **Complete replay.** The joining client records the complete game history
   in its demo, with the original timing.
 
@@ -98,10 +99,16 @@ so identical synced states give identical bytes on every client, which is
 what lets verifiers confirm the provider's snapshot by digest:
 
 * client specific data is excluded or stored as neutral values: local player
-  identity, UI settings and caches, control groups, rendering data, native AI
-  data, members marked `CR_MEMBER_UNSYNCED` (draw positions, feature fade
-  values, cached model piece transforms, the local player's input statistics,
-  icons and selection volumes set by widgets, visual smoke trails);
+  identity, UI settings and caches, control groups, the local player's wait
+  commands (and the local key they put into a factory-built unit's timed
+  wait), the unit categories added by selection filters, rendering data,
+  native AI data, members marked `CR_MEMBER_UNSYNCED` (draw positions,
+  feature fade values, cached model piece transforms, the local player's
+  input statistics, icons and selection volumes set by widgets, visual smoke
+  trails, team colours, shield segments, particle limits, texture atlas
+  coordinates, the smoke/fire bits of flying pieces that depend on the
+  client's particle saturation, projectile state written by the renderer or
+  drawn from the unsynced RNG);
 * unsynced objects (visual-effect projectiles, lights, the local selection)
   are left out, including every reference to them, and get sync-ids from a
   separate range so synced objects get identical ids everywhere;
