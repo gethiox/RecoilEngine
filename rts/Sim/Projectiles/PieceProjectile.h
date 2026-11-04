@@ -60,6 +60,8 @@ public:
 	int age;
 
 	unsigned int explFlags;
+	/// explFlags without the smoke/fire bits this client does not draw (particle saturation); unsynced
+	unsigned int drawFlags = 0;
 
 	const S3DModelPiece* omp;
 

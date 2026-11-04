@@ -934,14 +934,14 @@ void CUnitScript::Explode(int piece, int flags)
 		baseSpeed *= (l2 / l);
 	}
 
-	const float partSat = projectileHandler.GetParticleSaturation();
-
+	// whether smoke and fire are drawn is decided per client by the
+	// projectile (particle saturation), not here in synced state
 	unsigned int newFlags = 0;
-	newFlags |= (PF_Explode    *  ((flags & PF_Explode   ) != 0)                    );
-	newFlags |= (PF_Smoke      * (((flags & PF_Smoke     ) != 0) && partSat < 0.95f));
-	newFlags |= (PF_Fire       * (((flags & PF_Fire      ) != 0) && partSat < 0.95f));
-	newFlags |= (PF_NoCEGTrail *  ((flags & PF_NoCEGTrail) != 0)                    );
-	newFlags |= (PF_Recursive  *  ((flags & PF_Recursive ) != 0)                    );
+	newFlags |= (PF_Explode    * ((flags & PF_Explode   ) != 0));
+	newFlags |= (PF_Smoke      * ((flags & PF_Smoke     ) != 0));
+	newFlags |= (PF_Fire       * ((flags & PF_Fire      ) != 0));
+	newFlags |= (PF_NoCEGTrail * ((flags & PF_NoCEGTrail) != 0));
+	newFlags |= (PF_Recursive  * ((flags & PF_Recursive ) != 0));
 
 	projMemPool.alloc<CPieceProjectile>(unit, pieces[piece], absPos, explSpeed + baseSpeed, newFlags, 0.5f);
 #endif

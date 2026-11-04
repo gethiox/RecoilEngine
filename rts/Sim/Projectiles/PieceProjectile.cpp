@@ -29,12 +29,22 @@ static constexpr int   SMOKE_TIME   = 40;
 static constexpr int   SMOKE_SIZE   = 14;
 static constexpr float SMOKE_COLOR  = 0.5f;
 
+// smoke and fire trails are left out when this client's particles are
+// saturated: a local decision (config, unsynced particle count, unsynced RNG)
+// that must not end up in the synced flags
+static unsigned int LocalDrawFlags(unsigned int explFlags)
+{
+	const bool saturated = (projectileHandler.GetParticleSaturation() >= 0.95f);
+	return (explFlags & ~((PF_Smoke | PF_Fire) * int(saturated)));
+}
+
 CR_BIND_DERIVED(CPieceProjectile, CProjectile, )
 CR_REG_METADATA(CPieceProjectile,(
 	CR_SETFLAG(CF_Synced),
 
 	CR_MEMBER(age),
 	CR_MEMBER(explFlags),
+	CR_MEMBER_UNSYNCED(drawFlags), // see LocalDrawFlags
 	CR_IGNORED(omp),
 	CR_IGNORED(smokeTrail),
 	CR_IGNORED(fireTrailPoints),
@@ -54,6 +64,9 @@ void CPieceProjectile::PostLoad()
 	// trail is simply not drawn (GenExplosion ignores an invalid id)
 	if (!creg::IsSkippingUnsyncedMembers())
 		return;
+
+	drawFlags = LocalDrawFlags(explFlags);
+
 	if ((explFlags & PF_NoCEGTrail) != 0)
 		return;
 
@@ -105,6 +118,8 @@ CPieceProjectile::CPieceProjectile(
 		model = owner->model;
 		explFlags |= (PF_NoCEGTrail * (cegID == -1u));
 	}
+
+	drawFlags = LocalDrawFlags(explFlags);
 	{
 		// neither spinVector nor spinParams technically need to be
 		// synced, but since instances of this class are themselves
@@ -198,7 +213,7 @@ void CPieceProjectile::Collision(CUnit* unit, CFeature* feature)
 		helper->Explosion(params);
 	}
 
-	if (explFlags & PF_Smoke) {
+	if (drawFlags & PF_Smoke) {
 		if (explFlags & PF_NoCEGTrail) {
 			smokeTrail = projMemPool.alloc<CSmokeTrailProjectile>(
 				owner(),
@@ -265,7 +280,7 @@ void CPieceProjectile::Update()
 		return;
 	}
 
-	if (explFlags & PF_Fire) {
+	if (drawFlags & PF_Fire) {
 		for (int a = NUM_TRAIL_PARTS - 2; a >= 0; --a) {
 			fireTrailPoints[a + 1] = fireTrailPoints[a];
 		}
@@ -278,7 +293,7 @@ void CPieceProjectile::Update()
 		fireTrailPoints[0].size = 1 + guRNG.NextFloat();
 	}
 
-	if (explFlags & PF_Smoke) {
+	if (drawFlags & PF_Smoke) {
 		if (smokeTrail) {
 			smokeTrail->UpdateEndPos(pos, dir);
 			oldSmokePos = pos;
@@ -315,7 +330,7 @@ void CPieceProjectile::DrawOnMinimap() const
 void CPieceProjectile::Draw()
 {
 	RECOIL_DETAILED_TRACY_ZONE;
-	if ((explFlags & PF_Fire) == 0)
+	if ((drawFlags & PF_Fire) == 0)
 		return;
 
 	static constexpr SColor lightOrange(1.f, 0.78f, 0.59f, 0.2f);

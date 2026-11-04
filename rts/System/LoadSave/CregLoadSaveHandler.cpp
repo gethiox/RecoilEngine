@@ -222,7 +222,10 @@ void CGameStateCollector::Serialize(creg::ISerializer* s)
 	s->SerializeObjectInstance(&projectileHandler, projectileHandler.GetClass());
 	CPlasmaRepulser::SerializeShieldSegmentCollectionPool(s);
 	CColorMap::SerializeColorMaps(s);
-	s->SerializeObjectInstance(&waitCommandsAI, waitCommandsAI.GetClass());
+	// the wait commands of the local player (keys contain the player number,
+	// deadlines are wall-clock): client state, like the control groups
+	if (!GameSnapshot::IsActive())
+		s->SerializeObjectInstance(&waitCommandsAI, waitCommandsAI.GetClass());
 	s->SerializeObjectInstance(&envResHandler, envResHandler.GetClass());
 	s->SerializeObjectInstance(&moveDefHandler, moveDefHandler.GetClass());
 	s->SerializeObjectInstance(&teamHandler, teamHandler.GetClass());
