@@ -417,6 +417,9 @@ void CUnit::PostLoad()
 		selectionVolume.InitDefault(float4(model->radius, model->height,  xsize * SQUARE_SIZE, zsize * SQUARE_SIZE));
 	}
 
+	// unsynced, not saved: as in PreInit
+	leaveTracks = unitDef->decalDef.leaveTrackDecals;
+
 	UpdateRenderParams();
 	eventHandler.RenderUnitPreCreated(this);
 	eventHandler.RenderUnitCreated(this, isCloaked);

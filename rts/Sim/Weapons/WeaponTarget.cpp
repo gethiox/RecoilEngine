@@ -9,6 +9,7 @@
 CR_BIND(SWeaponTarget, )
 CR_REG_METADATA(SWeaponTarget, (
 	CR_MEMBER(isUserTarget),
+	CR_MEMBER(isAutoTarget),
 	CR_MEMBER(isManualFire),
 	CR_MEMBER(type),
 	CR_MEMBER(unit),
