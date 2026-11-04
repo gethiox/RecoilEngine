@@ -1118,33 +1118,43 @@ void ILosType::Serialize(creg::ISerializer* s)
 		return &instances[id];
 	};
 
-	// hash buckets; the order inside each bucket decides which instance gets
-	// shared first, so it is preserved
-	uint32_t numBuckets = instanceHashes.size();
+	// hash buckets, with the map's exact layout: the order inside a bucket
+	// decides which instance gets shared first, and UpdateHeightMapSynced
+	// iterates the map (in bucket order) when queueing instances
+	uint64_t numBuckets = instanceHashes.layout_bucket_count();
+	int32_t maxProbeLength = instanceHashes.layout_max_probe_length();
 	SerializeValue(s, numBuckets);
+	SerializeValue(s, maxProbeLength);
+
+	if (numBuckets > (uint64_t(1) << 32) || (numBuckets & (numBuckets - 1)) != 0)
+		throw content_error("[ILosType::Serialize] invalid bucket count");
+
+	std::vector<uint8_t> states(numBuckets);
 
 	if (s->IsWriting()) {
-		// write buckets ordered by key so the output does not depend on the
-		// hash map's internal layout
-		std::vector<int> keys;
-		keys.reserve(numBuckets);
+		for (size_t b = 0; b < numBuckets; b++)
+			states[b] = instanceHashes.layout_state(b);
+	}
 
-		for (const auto& p: instanceHashes)
-			keys.push_back(p.first);
+	s->Serialize(states.data(), static_cast<int>(numBuckets));
 
-		std::sort(keys.begin(), keys.end());
-
-		for (int key: keys) {
+	if (s->IsWriting()) {
+		for (auto& p: instanceHashes) {
+			int key = p.first;
 			SerializeValue(s, key);
-			SerializeInstanceRefs(s, instanceHashes[key], ToID, FromID);
+			SerializeInstanceRefs(s, p.second, ToID, FromID);
 		}
 	} else {
-		spring::clear_unordered_map(instanceHashes);
+		instanceHashes.layout_restore(numBuckets, maxProbeLength, states);
 
-		for (uint32_t i = 0; i < numBuckets; i++) {
+		for (size_t b = 0; b < numBuckets; b++) {
+			if (states[b] != decltype(instanceHashes)::LAYOUT_STATE_FILLED)
+				continue;
+
 			int key = 0;
 			SerializeValue(s, key);
-			SerializeInstanceRefs(s, instanceHashes[key], ToID, FromID);
+			auto& p = instanceHashes.layout_fill(b, std::move(key));
+			SerializeInstanceRefs(s, p.second, ToID, FromID);
 		}
 	}
 
