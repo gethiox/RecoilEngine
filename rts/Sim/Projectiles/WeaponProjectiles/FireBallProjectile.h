@@ -18,6 +18,8 @@ public:
 
 	void Draw() override;
 	void Update() override;
+	void Serialize(creg::ISerializer* s);
+	void PostLoad();
 	void Collision() override;
 
 	int GetProjectilesCount() const override;

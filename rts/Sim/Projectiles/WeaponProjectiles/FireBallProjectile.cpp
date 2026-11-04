@@ -13,14 +13,43 @@
 #include "System/SpringMath.h"
 
 #include "System/Misc/TracyDefs.h"
+#include "System/creg/Serializer.h"
 
 CR_BIND_DERIVED(CFireBallProjectile, CWeaponProjectile, )
 
 CR_REG_METADATA(CFireBallProjectile,(
 	CR_SETFLAG(CF_Synced),
-	CR_MEMBER_UNSYNCED(sparks), // visual, from the unsynced RNG
-	CR_MEMBER(numSparks)
+	CR_MEMBER_UNSYNCED(sparks), // visual, from the unsynced RNG; their lifetimes see Serialize
+	CR_MEMBER(numSparks),
+
+	CR_SERIALIZER(Serialize),
+	CR_POSTLOAD(PostLoad)
 ))
+
+void CFireBallProjectile::Serialize(creg::ISerializer* s)
+{
+	// the sparks are visual, but their remaining lifetimes decide when the
+	// projectile is deleted (Update): those are synced
+	for (unsigned int i = 0; i < numSparks; i++)
+		s->SerializeInt(&sparks[i].ttl, sizeof(sparks[i].ttl));
+}
+
+void CFireBallProjectile::PostLoad()
+{
+	if (!creg::IsSkippingUnsyncedMembers())
+		return;
+
+	validTextures[1] = IsValidTexture(projectileDrawer->explotex);
+	validTextures[2] = IsValidTexture(projectileDrawer->dguntex);
+	validTextures[0] = validTextures[1] || validTextures[2];
+
+	// a snapshot has the lifetimes only; the sparks start at the projectile
+	for (unsigned int i = 0; i < numSparks; i++) {
+		sparks[i].speed = speed * 0.95f;
+		sparks[i].pos = pos;
+		sparks[i].size = 5.0f;
+	}
+}
 
 
 CR_BIND(CFireBallProjectile::Spark, )
