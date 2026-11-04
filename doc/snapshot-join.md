@@ -108,7 +108,13 @@ what lets verifiers confirm the provider's snapshot by digest:
 * the synced Lua heap is brought into a canonical form that does not change
   its behaviour (`creg::MakeCanonicalLuaState`): leaked values on idle
   thread stacks dropped, sizes that depend on the collector's (wall-clock
-  driven) timing normalized, string table buckets sorted;
+  driven) timing normalized, string table buckets sorted, and tables whose
+  size and node layout depend on the collector's timing (weak tables, tables
+  keyed by coroutines/tables/functions, e.g. BAR's per-unit script thread
+  sets) resized and rebuilt from their contents in a canonical order;
+* a path whose owning unit was destroyed before the path manager dropped it
+  (the engine tolerates such owners and only checks that they are unusable)
+  gets a stand-in dead owner on the joining client;
 * per-query stamps (`tempNum`) are written canonically.
 
 Loading keeps the joining client's identity and unsynced settings. Nothing is
@@ -213,8 +219,10 @@ start script still have to wait, as anyone could connect with their name.
 * `run_mp_join.py` - end-to-end test: dedicated server, two players (one
   hosting two Lua AIs), a spectator; one player leaves (or is killed and
   restarts at once, `--kill`) and rejoins from a snapshot, opting in through
-  the start script (also as spectator,
-  `--bob-spectator`, or while the game is paused, `--pause`). Checks: the
+  the start script (also as spectator, `--bob-spectator`, while the game is
+  paused, `--pause`, a second time in the same game, `--rejoin-twice`, with
+  a provider only, `--sources 1`, or requiring verifier confirmation,
+  `--sources 2 --min-sources 2`). Checks: the
   joiner simulated no frame before the snapshot and every frame after it
   matches the other clients; the snapshots of different sources are
   byte-identical and equal to what the joiner loaded (`--compare-snapshots`);
