@@ -30,6 +30,10 @@ public:
 	float GetExtractionRange() const { return extractionRange; }
 	float GetExtractionDepth() const { return extractionDepth; }
 
+	// synced static (grows with every placed extractor), part of the saved game
+	static float GetMaxExtractionRange() { return maxExtractionRange; }
+	static void SetMaxExtractionRange(float range) { maxExtractionRange = range; }
+
 	void Activate() override;
 	void Deactivate() override;
 

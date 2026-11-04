@@ -30,6 +30,8 @@
 #include "Sim/Ecs/Helper.h"
 #include "Sim/Features/FeatureHandler.h"
 #include "Sim/Units/UnitHandler.h"
+#include "Sim/Units/UnitToolTipMap.hpp"
+#include "Sim/Units/UnitTypes/ExtractorBuilding.h"
 #include "Sim/Misc/BuildingMaskMap.h"
 #include "Sim/Misc/GroundBlockingObjectMap.h"
 #include "Sim/Misc/InterceptHandler.h"
@@ -150,6 +152,15 @@ static void SerializeSyncedGlobals(creg::ISerializer* s)
 
 	// explosions still deforming the terrain
 	mapDamage->Serialize(s);
+
+	// the largest extraction range used so far (a class static), the neighbour search radius of new extractors
+	{
+		float maxExtractionRange = CExtractorBuilding::GetMaxExtractionRange();
+		s->Serialize(&maxExtractionRange, sizeof(maxExtractionRange));
+		CExtractorBuilding::SetMaxExtractionRange(maxExtractionRange);
+	}
+	// unit tooltips are set and read by synced Lua
+	unitToolTipMap.Serialize(s);
 
 	if (s->IsWriting())
 		return;
