@@ -20,6 +20,7 @@
 #include "System/SpringMath.h"
 
 #include "System/Misc/TracyDefs.h"
+#include "System/creg/Serializer.h"
 
 
 CR_BIND(CStarburstProjectile::TracerPart, )
@@ -36,8 +37,8 @@ CR_BIND_DERIVED(CStarburstProjectile, CWeaponProjectile, )
 CR_REG_METADATA(CStarburstProjectile, (
 	CR_SETFLAG(CF_Synced),
 	CR_MEMBER(aimError),
-	CR_MEMBER(oldSmoke),
-	CR_MEMBER(oldSmokeDir),
+	CR_MEMBER_UNSYNCED(oldSmoke), // only advanced while the (unsynced) trail exists
+	CR_MEMBER_UNSYNCED(oldSmokeDir),
 
 	CR_MEMBER(tracking),
 	CR_MEMBER(maxGoodDif),
@@ -56,8 +57,20 @@ CR_REG_METADATA(CStarburstProjectile, (
 	CR_MEMBER(turnToTarget),
 
 	CR_MEMBER_UNSYNCED(tracerParts), // visual, from the unsynced RNG
-	CR_MEMBER_UNSYNCED(smokeTrail) // an unsynced (visual) projectile, recreated when needed
+	CR_MEMBER_UNSYNCED(smokeTrail), // an unsynced (visual) projectile, recreated when needed
+
+	CR_POSTLOAD(PostLoad)
 ))
+
+void CStarburstProjectile::PostLoad()
+{
+	// the trail starts afresh on a joining client
+	if (!creg::IsSkippingUnsyncedMembers())
+		return;
+
+	oldSmoke = pos;
+	oldSmokeDir = dir;
+}
 
 
 CStarburstProjectile::CStarburstProjectile(const ProjectileParams& params): CWeaponProjectile(params)

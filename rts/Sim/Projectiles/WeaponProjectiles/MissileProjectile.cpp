@@ -21,6 +21,7 @@
 #include "System/SpringMath.h"
 
 #include "System/Misc/TracyDefs.h"
+#include "System/creg/Serializer.h"
 
 CR_BIND_DERIVED(CMissileProjectile, CWeaponProjectile, )
 
@@ -30,8 +31,8 @@ CR_REG_METADATA(CMissileProjectile,(
 	CR_MEMBER(maxSpeed),
 	// CR_MEMBER(ttl),
 	CR_MEMBER(age),
-	CR_MEMBER(oldSmoke),
-	CR_MEMBER(oldDir),
+	CR_MEMBER_UNSYNCED(oldSmoke), // only advanced while the (unsynced) trail exists
+	CR_MEMBER_UNSYNCED(oldDir),
 	CR_MEMBER(numParts),
 	CR_MEMBER(isWobbling),
 	CR_MEMBER(wobbleDir),
@@ -44,8 +45,20 @@ CR_REG_METADATA(CMissileProjectile,(
 	CR_MEMBER(extraHeight),
 	CR_MEMBER(extraHeightDecay),
 	CR_MEMBER(extraHeightTime),
-	CR_IGNORED(smokeTrail)
+	CR_IGNORED(smokeTrail),
+
+	CR_POSTLOAD(PostLoad)
 ))
+
+void CMissileProjectile::PostLoad()
+{
+	// the trail starts afresh on a joining client
+	if (!creg::IsSkippingUnsyncedMembers())
+		return;
+
+	oldSmoke = pos;
+	oldDir = dir;
+}
 
 
 CMissileProjectile::CMissileProjectile(const ProjectileParams& params): CWeaponProjectile(params)

@@ -25,6 +25,7 @@ public:
 	void Collision() override;
 
 	void Update() override;
+	void PostLoad();
 	void Draw() override;
 
 	int GetProjectilesCount() const override;

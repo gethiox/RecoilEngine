@@ -12,6 +12,8 @@
 #include "Rendering/Env/Particles/ProjectileDrawer.h"
 #include "Rendering/Env/Particles/Classes/SmokeTrailProjectile.h"
 #include "Rendering/Models/3DModelPiece.hpp"
+#include "Rendering/Models/3DModel.hpp"
+#include "Rendering/Models/IModelParser.h"
 #include "Sim/Misc/GlobalSynced.h"
 #include "Sim/Misc/ModInfo.h"
 #include "Sim/Projectiles/ExplosionGenerator.h"
@@ -22,6 +24,7 @@
 #include "System/Matrix44f.h"
 #include "System/SpringMath.h"
 #include "System/creg/Serializer.h"
+#include "System/creg/RawSerialize.h"
 
 #include "System/Misc/TracyDefs.h"
 
@@ -51,14 +54,49 @@ CR_REG_METADATA(CPieceProjectile,(
 	CR_MEMBER(spinVec),
 	CR_MEMBER(spinSpeed),
 	CR_MEMBER(spinAngle),
-	CR_MEMBER(oldSmokePos),
-	CR_MEMBER(oldSmokeDir),
+	CR_MEMBER_UNSYNCED(oldSmokePos), // only advanced while the (unsynced) trail exists
+	CR_MEMBER_UNSYNCED(oldSmokeDir),
 
+	CR_SERIALIZER(Serialize),
 	CR_POSTLOAD(PostLoad)
 ))
 
+void CPieceProjectile::Serialize(creg::ISerializer* s)
+{
+	// the model and the piece are not creg objects: stored by name and index
+	creg::RawArchive ar(s);
+	std::string modelName = (model != nullptr) ? model->name : "";
+	int32_t pieceIndex = -1;
+
+	if (model != nullptr && omp != nullptr) {
+		for (size_t i = 0; i < model->pieceObjects.size(); i++) {
+			if (model->pieceObjects[i] == omp) {
+				pieceIndex = static_cast<int32_t>(i);
+				break;
+			}
+		}
+	}
+
+	ar.String(modelName);
+	ar.Value(pieceIndex);
+
+	if (ar.IsWriting())
+		return;
+
+	if (!modelName.empty())
+		model = modelLoader.LoadModel(modelName);
+
+	omp = (model != nullptr && pieceIndex >= 0 && size_t(pieceIndex) < model->pieceObjects.size()) ? model->GetPiece(pieceIndex) : nullptr;
+}
+
 void CPieceProjectile::PostLoad()
 {
+	if (creg::IsSkippingUnsyncedMembers()) {
+		// the trail starts afresh on a joining client
+		oldSmokePos = pos;
+		oldSmokeDir = dir;
+	}
+
 	// the trail effect is chosen with the unsynced RNG (see the constructor)
 	// and left out of snapshots: choose one again; without an owner the
 	// trail is simply not drawn (GenExplosion ignores an invalid id)

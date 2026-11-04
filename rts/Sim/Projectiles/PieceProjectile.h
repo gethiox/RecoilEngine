@@ -35,6 +35,7 @@ public:
 	);
 
 	void Update() override;
+	void Serialize(creg::ISerializer* s);
 	void PostLoad();
 	void Draw() override;
 	void DrawOnMinimap() const override;
