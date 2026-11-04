@@ -21,7 +21,7 @@ CR_REG_METADATA(LocalModelPiece, (
 	CR_MEMBER(colvol),
 
 	CR_IGNORED(wasUpdated),
-	CR_MEMBER(noInterpolation),
+	CR_MEMBER_UNSYNCED(noInterpolation), // reset by the renderer
 	CR_MEMBER_UNSYNCED(dirty),
 
 	CR_MEMBER(scriptSetVisible),

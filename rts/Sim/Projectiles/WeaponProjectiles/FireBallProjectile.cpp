@@ -18,7 +18,7 @@ CR_BIND_DERIVED(CFireBallProjectile, CWeaponProjectile, )
 
 CR_REG_METADATA(CFireBallProjectile,(
 	CR_SETFLAG(CF_Synced),
-	CR_MEMBER(sparks),
+	CR_MEMBER_UNSYNCED(sparks), // visual, from the unsynced RNG
 	CR_MEMBER(numSparks)
 ))
 

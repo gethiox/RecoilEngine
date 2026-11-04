@@ -49,6 +49,9 @@ CR_REG_METADATA(CWeaponProjectile,(
 void CWeaponProjectile::Serialize(creg::ISerializer* s)
 {
 	DynDamageArray::SerializeRef(s, damages);
+	// set from the (synced) spawn parameters, the weapon definition or
+	// Spring.SetProjectileCEG, unlike the piece projectiles' random choice
+	s->SerializeInt(&cegID, sizeof(cegID));
 }
 
 

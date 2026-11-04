@@ -30,7 +30,7 @@ CR_REG_METADATA(CProjectile,
 	CR_MEMBER(checkCol),
 	CR_MEMBER(ignoreWater),
 
-	CR_IGNORED(createMe),
+	CR_IGNORED(createMe), // see PostLoad
 	CR_MEMBER(deleteMe),
 
 	CR_MEMBER(drawSorted),
@@ -54,14 +54,25 @@ CR_REG_METADATA(CProjectile,
 	CR_MEMBER(ownerID),
 	CR_MEMBER(teamID),
 	CR_MEMBER(allyteamID),
-	CR_MEMBER(cegID),
+	CR_MEMBER_UNSYNCED(cegID), // chosen with the unsynced RNG by piece projectiles; weapon projectiles store theirs, see CWeaponProjectile::Serialize
 
 	CR_MEMBER(projectileType),
 	CR_MEMBER(collisionFlags),
 	CR_IGNORED(renderIndex),
 
-	CR_MEMBER(quads)
+	CR_MEMBER(quads),
+
+	CR_POSTLOAD(PostLoad)
 ))
+
+void CProjectile::PostLoad()
+{
+	// a loaded projectile was announced to the synced game (ProjectileCreated)
+	// before it was saved: the callin must not repeat on load (the Lua state
+	// that handled it is part of the save); the local rendering side is told
+	// about it after the whole state is loaded, see CCregLoadSaveHandler
+	createMe = false;
+}
 
 // Minimap render buffers moved to CProjectileDrawer for proper lifecycle management
 

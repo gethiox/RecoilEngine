@@ -29,10 +29,10 @@ CR_REG_METADATA(CExpGenSpawnable, (
 	CR_MEMBER(rotVal),
 	CR_MEMBER(rotVel),
 	CR_MEMBER(createFrame),
-	CR_MEMBER(animProgress1),
-	CR_MEMBER(animProgress2),
-	CR_MEMBER(animProgress3),
-	CR_MEMBER(animProgress4),
+	CR_MEMBER_UNSYNCED(animProgress1), // written by Draw
+	CR_MEMBER_UNSYNCED(animProgress2), // written by Draw
+	CR_MEMBER_UNSYNCED(animProgress3), // written by Draw
+	CR_MEMBER_UNSYNCED(animProgress4), // written by Draw
 	CR_MEMBER_BEGINFLAG(CM_Config),
 		CR_MEMBER(rotParams),
 		CR_FAKE(animParams),

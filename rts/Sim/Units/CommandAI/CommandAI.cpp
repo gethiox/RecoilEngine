@@ -77,13 +77,46 @@ CR_REG_METADATA(CCommandAI, (
 	CR_MEMBER(orderTarget),
 	CR_MEMBER(targetDied),
 	CR_MEMBER(repeatOrders),
-	CR_MEMBER(lastSelectedCommandPage),
+	CR_MEMBER_UNSYNCED(lastSelectedCommandPage), // GUI state
 	CR_MEMBER(inCommand),
-	CR_MEMBER(commandDeathDependences),
+	CR_IGNORED(commandDeathDependences), // see Serialize
 	CR_MEMBER(targetLostTimer),
 
+	CR_SERIALIZER(Serialize),
 	CR_PREALLOC(GetPreallocContainer)
 ))
+
+void CCommandAI::Serialize(creg::ISerializer* s)
+{
+	// the set hashes by address: its order differs between processes, so it
+	// is stored sorted by sync id (identical on every client); the order is
+	// never used by the simulation
+	std::vector<CObject*> objs;
+
+	if (s->IsWriting()) {
+		objs.assign(commandDeathDependences.begin(), commandDeathDependences.end());
+		std::sort(objs.begin(), objs.end(), [](const CObject* a, const CObject* b) { return (a->GetSyncID() < b->GetSyncID()); });
+	}
+
+	uint32_t count = objs.size();
+	s->SerializeInt(&count, sizeof(count));
+	objs.resize(count, nullptr);
+
+	for (CObject*& o: objs) {
+		s->SerializeObjectPtr(reinterpret_cast<void**>(&o), CObject::StaticClass());
+		// units and features are allocated before any member is read, so
+		// the pointer is resolved here (only embedded objects are patched later)
+		assert(s->IsWriting() || (o != reinterpret_cast<CObject*>(1)));
+	}
+
+	if (s->IsWriting())
+		return;
+
+	commandDeathDependences.clear();
+
+	for (CObject* o: objs)
+		commandDeathDependences.insert(o);
+}
 
 CCommandAI::CCommandAI():
 	stockpileWeapon(0),

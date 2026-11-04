@@ -21,6 +21,7 @@
 #include "Sim/Units/UnitDef.h"
 #include "System/Matrix44f.h"
 #include "System/SpringMath.h"
+#include "System/creg/Serializer.h"
 
 #include "System/Misc/TracyDefs.h"
 
@@ -41,8 +42,31 @@ CR_REG_METADATA(CPieceProjectile,(
 	CR_MEMBER(spinSpeed),
 	CR_MEMBER(spinAngle),
 	CR_MEMBER(oldSmokePos),
-	CR_MEMBER(oldSmokeDir)
+	CR_MEMBER(oldSmokeDir),
+
+	CR_POSTLOAD(PostLoad)
 ))
+
+void CPieceProjectile::PostLoad()
+{
+	// the trail effect is chosen with the unsynced RNG (see the constructor)
+	// and left out of snapshots: choose one again; without an owner the
+	// trail is simply not drawn (GenExplosion ignores an invalid id)
+	if (!creg::IsSkippingUnsyncedMembers())
+		return;
+	if ((explFlags & PF_NoCEGTrail) != 0)
+		return;
+
+	const CUnit* ownerUnit = owner();
+
+	if (ownerUnit == nullptr)
+		return;
+
+	const UnitDef* ud = ownerUnit->unitDef;
+
+	if (ud->GetPieceExpGenCount() > 0)
+		cegID = ud->GetPieceExpGenID(guRNG.NextInt(ud->GetPieceExpGenCount()));
+}
 
 CPieceProjectile::CPieceProjectile(
 	CUnit* owner,

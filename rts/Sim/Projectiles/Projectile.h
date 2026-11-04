@@ -43,6 +43,8 @@ public:
 	);
 	virtual ~CProjectile();
 
+	void PostLoad();
+
 	virtual void Collision() { Delete(); }
 	virtual void Collision(CUnit* unit) { Collision(); }
 	virtual void Collision(CFeature* feature) { Collision(); }

@@ -2997,7 +2997,7 @@ CR_REG_METADATA(CUnit, (
 
 	CR_MEMBER(selfDCountdown),
 
-	CR_MEMBER(definedIconName),
+	CR_MEMBER_UNSYNCED(definedIconName), // copied from the (unsynced Lua changeable) def icon, see UpdateRenderParams
 	CR_MEMBER_UN(currentIconIndex),
 	CR_MEMBER_UNSYNCED(customIconIndex), // set by unsynced Lua (Spring.SetUnitIcon)
 	CR_MEMBER_UN(drawIcon),

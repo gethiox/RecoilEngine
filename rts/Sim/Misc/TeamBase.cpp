@@ -15,7 +15,7 @@
 CR_BIND(TeamBase, )
 CR_REG_METADATA(TeamBase, (
 	CR_MEMBER(leader),
-	CR_MEMBER(color),
+	CR_MEMBER_UNSYNCED(color), // widgets change it (Spring.SetTeamColor)
 	CR_MEMBER(origColor),
 	CR_MEMBER(teamStartNum),
 	CR_MEMBER(teamAllyteam),

@@ -58,9 +58,9 @@ CR_REG_METADATA(CProjectileHandler, (
 	CR_MEMBER_UN(groundFlashes),
 	CR_MEMBER_UN(resortFlyingPieces),
 
-	CR_MEMBER(maxParticles),
-	CR_MEMBER(maxNanoParticles),
-	CR_MEMBER(currentNanoParticles),
+	CR_MEMBER_UNSYNCED(maxParticles), // local config / renderer counter
+	CR_MEMBER_UNSYNCED(maxNanoParticles), // local config / renderer counter
+	CR_MEMBER_UNSYNCED(currentNanoParticles), // local config / renderer counter
 	CR_MEMBER_UN(frameCurrentParticles),
 	CR_MEMBER_UN(frameProjectileCounts),
 

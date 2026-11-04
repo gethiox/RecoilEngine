@@ -46,6 +46,7 @@ CR_REG_METADATA(CStarburstProjectile, (
 	CR_MEMBER(distanceToTravel),
 
 	CR_MEMBER(uptime),
+	CR_MEMBER(leaveSmokeTrail),
 	CR_MEMBER(trailAge),
 	CR_MEMBER(numParts),
 	CR_MEMBER(missileAge),
@@ -54,7 +55,7 @@ CR_REG_METADATA(CStarburstProjectile, (
 	CR_MEMBER(ignoreError),
 	CR_MEMBER(turnToTarget),
 
-	CR_MEMBER(tracerParts),
+	CR_MEMBER_UNSYNCED(tracerParts), // visual, from the unsynced RNG
 	CR_MEMBER_UNSYNCED(smokeTrail) // an unsynced (visual) projectile, recreated when needed
 ))
 

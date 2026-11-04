@@ -25,6 +25,8 @@ public:
 	CCommandAI();
 	virtual ~CCommandAI();
 
+	void Serialize(creg::ISerializer* s);
+
 	void* GetPreallocContainer() { return owner; }  // creg
 
 	void DependentDied(CObject* o);

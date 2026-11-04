@@ -30,8 +30,8 @@ CR_REG_METADATA(CFireProjectile,(
 	CR_MEMBER(particleTime),
 	CR_MEMBER(particleSize),
 	CR_MEMBER(ageSpeed),
-	CR_MEMBER(subParticles2),
-	CR_MEMBER(subParticles)
+	CR_MEMBER_UNSYNCED(subParticles2), // visual, from the unsynced RNG
+	CR_MEMBER_UNSYNCED(subParticles) // visual, from the unsynced RNG
 ))
 
 CR_REG_METADATA_SUB(CFireProjectile, SubParticle, (

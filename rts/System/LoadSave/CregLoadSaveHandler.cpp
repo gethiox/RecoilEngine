@@ -50,6 +50,7 @@
 #include "Sim/Misc/Wind.h"
 #include "Sim/Misc/YardmapStatusEffectsMap.h"
 #include "Sim/Projectiles/ProjectileHandler.h"
+#include "System/EventHandler.h"
 #include "Sim/Units/CommandAI/CommandDescription.h"
 #include "Sim/Units/Scripts/CobEngine.h"
 #include "Sim/Units/Scripts/UnitScriptEngine.h"
@@ -855,6 +856,15 @@ void CCregLoadSaveHandler::LoadGame()
 	if (joinMode) {
 		localState.Apply();
 		localTempNums.ContinueCounters();
+	}
+
+	// the renderer meets the loaded projectiles here (their models are loaded
+	// by then, see CProjectile::PostLoad for why not through createMe)
+	for (const bool synced: {true, false}) {
+		for (CProjectile* p: projectileHandler.GetActiveProjectiles(synced)) {
+			assert(!p->createMe);
+			eventHandler.RenderProjectileCreated(p);
+		}
 	}
 
 #ifdef SYNCCHECK

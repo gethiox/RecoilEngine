@@ -29,8 +29,8 @@ CR_REG_METADATA(CTorpedoProjectile,(
 	CR_MEMBER(tracking),
 	CR_MEMBER(maxSpeed),
 	CR_MEMBER(nextBubble),
-	CR_MEMBER(texx),
-	CR_MEMBER(texy)
+	CR_MEMBER_UNSYNCED(texx), // texture atlas coordinate
+	CR_MEMBER_UNSYNCED(texy) // texture atlas coordinate
 ))
 
 

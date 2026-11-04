@@ -25,7 +25,7 @@ CR_REG_METADATA(CLaserProjectile,(
 	CR_MEMBER(curLength),
 	CR_MEMBER(stayTime),
 	CR_MEMBER(intensityFalloff),
-	CR_MEMBER(midtexx)
+	CR_MEMBER_UNSYNCED(midtexx) // texture atlas coordinate
 ))
 
 

@@ -35,6 +35,7 @@ public:
 	);
 
 	void Update() override;
+	void PostLoad();
 	void Draw() override;
 	void DrawOnMinimap() const override;
 	void Collision() override;

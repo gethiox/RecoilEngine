@@ -25,7 +25,7 @@ CR_REG_METADATA(CBeamLaserProjectile,(
 	CR_MEMBER(corethickness),
 	CR_MEMBER(flaresize),
 	CR_MEMBER(decay),
-	CR_MEMBER(midtexx)
+	CR_MEMBER_UNSYNCED(midtexx) // texture atlas coordinate
 ))
 
 
