@@ -59,13 +59,28 @@ CR_REG_METADATA(CFeature, (
 	CR_MEMBER(moveCtrl),
 
 	CR_MEMBER(solidOnTop),
-	CR_MEMBER(transMatrix),
+	CR_IGNORED(transMatrix), // see Serialize
 
 	// set by synced Lua (Spring.SetFeatureNoSelect) and read back by it, unlike for units
 	CR_MEMBER(noSelect),
 
+	CR_SERIALIZER(Serialize),
 	CR_POSTLOAD(PostLoad)
 ))
+
+void CFeature::Serialize(creg::ISerializer* s)
+{
+	// [1] is the synced transform, [0] the one the renderer interpolates
+	s->Serialize(&transMatrix[1], sizeof(transMatrix[1]));
+
+	if (!creg::IsSkippingUnsyncedMembers()) {
+		s->Serialize(&transMatrix[0], sizeof(transMatrix[0]));
+		return;
+	}
+
+	if (!s->IsWriting())
+		transMatrix[0] = transMatrix[1];
+}
 
 CR_BIND(CFeature::MoveCtrl,)
 

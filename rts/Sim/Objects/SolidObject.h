@@ -129,6 +129,7 @@ public:
 	explicit CSolidObject(bool syncedObject);
 	virtual ~CSolidObject() {}
 
+	void Serialize(creg::ISerializer* s);
 	void PostLoad();
 
 	virtual bool AddBuildPower(CUnit* builder, float amount) { return false; }

@@ -419,6 +419,8 @@ void CUnit::PostLoad()
 
 	// unsynced, not saved: as in PreInit
 	leaveTracks = unitDef->decalDef.leaveTrackDecals;
+	// not saved either; as UpdateVoidState sets it
+	noSelect = (IsInVoid() || !unitDef->selectable);
 
 	UpdateRenderParams();
 	eventHandler.RenderUnitPreCreated(this);

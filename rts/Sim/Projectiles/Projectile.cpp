@@ -49,7 +49,7 @@ CR_REG_METADATA(CProjectile,
 	CR_IGNORED(sortDist),
 	CR_MEMBER(sortDistOffset),
 
-	CR_MEMBER(validTextures),
+	CR_MEMBER_UNSYNCED(validTextures), // which textures this client's atlas has; recomputed on load
 
 	CR_MEMBER(ownerID),
 	CR_MEMBER(teamID),
