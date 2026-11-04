@@ -178,6 +178,9 @@ static int WeaponDefNewIndex(lua_State* L)
 	const DataElement& elem = it->second;
 	const void* p = ((const char*)wd) + elem.offset;
 
+	// see CSnapshotJoinClient::CreateSnapshot
+	gs->defsEdited = true;
+
 	switch (elem.type) {
 		case FUNCTION_TYPE:
 		case READONLY_TYPE: {

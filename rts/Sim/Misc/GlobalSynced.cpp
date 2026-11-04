@@ -48,6 +48,7 @@ CR_REG_METADATA(CGlobalSynced, (
 	CR_MEMBER(cheatEnabled),
 	CR_MEMBER(noHelperAIs),
 	CR_MEMBER(editDefsEnabled),
+	CR_MEMBER(defsEdited),
 	CR_MEMBER(useLuaGaia)
 ))
 

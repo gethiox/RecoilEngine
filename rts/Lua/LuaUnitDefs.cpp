@@ -178,6 +178,9 @@ static int UnitDefNewIndex(lua_State* L)
 	const DataElement& elem = it->second;
 	const void* p = ((const char*)ud) + elem.offset;
 
+	// see CSnapshotJoinClient::CreateSnapshot
+	gs->defsEdited = true;
+
 	switch (elem.type) {
 		case FUNCTION_TYPE:
 		case READONLY_TYPE: {

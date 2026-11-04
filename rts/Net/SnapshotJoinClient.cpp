@@ -384,6 +384,13 @@ void CSnapshotJoinClient::CreateSnapshot(uint8_t requestID, uint8_t role, int32_
 		SendHash(requestID, SNAPSHOT_STATUS_UNSUPPORTED, gs->frameNum, 0, noDigest);
 		return;
 	}
+	// a joining client builds its defs from the archives, edits are not in
+	// the snapshot (and gs->defsEdited is synced, so every source refuses)
+	if (gs->defsEdited) {
+		LOG("[SnapshotJoin] request %d: defs were edited by Lua, no snapshot", requestID);
+		SendHash(requestID, SNAPSHOT_STATUS_UNSUPPORTED, gs->frameNum, 0, noDigest);
+		return;
+	}
 
 	// the only part that stalls this client: the serialization itself
 	const spring_time t0 = spring_gettime();

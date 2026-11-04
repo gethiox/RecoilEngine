@@ -131,6 +131,9 @@ public:
 	* Whether editing of unit-, feature- and weapon-defs through Lua is enabled.
 	*/
 	bool editDefsEnabled = false;
+	/// a unit, weapon or feature def was edited through Lua (the defs are
+	/// not part of a saved game or snapshot: a joining client cannot get them)
+	bool defsEdited = false;
 
 	/**
 	* @brief LuaGaia control
