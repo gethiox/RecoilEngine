@@ -18,6 +18,8 @@
 #include "Game/GameVersion.h"
 #include "Game/GlobalUnsynced.h"
 #include "Game/WaitCommandsAI.h"
+#include "Sim/Units/UnitDefHandler.h"
+#include "Game/GameHelper.h"
 #include "Game/SelectedUnitsHandler.h"
 #include "Game/Players/PlayerHandler.h"
 #include "Game/UI/Groups/GroupHandler.h"
@@ -152,6 +154,18 @@ static void SerializeSyncedGlobals(creg::ISerializer* s)
 
 	// explosions still deforming the terrain
 	mapDamage->Serialize(s);
+	// explosion damage that reaches distant units in a later frame
+	helper->Serialize(s);
+
+	// the /nocost cheat rewrites the unit defs' costs (deterministically, so the
+	// flag is enough)
+	{
+		uint8_t noCost = unitDefHandler->GetNoCost();
+		s->SerializeInt(&noCost, sizeof(noCost));
+
+		if (!s->IsWriting())
+			unitDefHandler->SetNoCost(noCost != 0);
+	}
 
 	// the largest extraction range used so far (a class static), the neighbour search radius of new extractors
 	{
