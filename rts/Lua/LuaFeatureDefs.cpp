@@ -202,8 +202,10 @@ static int FeatureDefNewIndex(lua_State* L)
 	const DataElement& elem = it->second;
 	const void* p = ((const char*)fd) + elem.offset;
 
-	// see CSnapshotJoinClient::CreateSnapshot
-	gs->defsEdited = true;
+	// see CSnapshotJoinClient::CreateSnapshot (a widget editing defs on one
+	// client breaks that client, not the synced flag)
+	if (CLuaHandle::GetHandleSynced(L))
+		gs->defsEdited = true;
 
 	switch (elem.type) {
 		case FUNCTION_TYPE:
