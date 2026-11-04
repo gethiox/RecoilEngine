@@ -197,7 +197,11 @@ void CGameStateCollector::Serialize(creg::ISerializer* s)
 	s->SerializeObjectInstance(&featureHandler, featureHandler.GetClass());
 	s->SerializeObjectInstance(losHandler, losHandler->GetClass());
 	s->SerializeObjectInstance(&interceptHandler, interceptHandler.GetClass());
-	s->SerializeObjectInstance(CCategoryHandler::Instance(), CCategoryHandler::Instance()->GetClass());
+	// the categories are a function of the unit defs (the simulation never
+	// adds one after loading them), but unsynced code does (selection
+	// filters, AI callbacks); a joining client keeps its own copy
+	if (!GameSnapshot::IsActive())
+		s->SerializeObjectInstance(CCategoryHandler::Instance(), CCategoryHandler::Instance()->GetClass());
 	s->SerializeObjectInstance(&groundBlockingObjectMap, groundBlockingObjectMap.GetClass());
 	s->SerializeObjectInstance(&yardmapStatusEffectsMap, yardmapStatusEffectsMap.GetClass());
 	s->SerializeObjectInstance(&buildingMaskMap, buildingMaskMap.GetClass());
@@ -677,7 +681,7 @@ bool CCregLoadSaveHandler::WriteStateForComparison(const std::string& basePath, 
 
 		WriteGameState(oss, &layout);
 
-		const std::string data = oss.str();
+		const std::string data = std::move(oss).str();
 		FILE* stateFile = fopen((basePath + ".state").c_str(), "wb");
 		FILE* layoutFile = fopen((basePath + ".layout").c_str(), "w");
 
@@ -736,7 +740,8 @@ bool CCregLoadSaveHandler::WriteSnapshot(std::string& raw)
 		oss.write(reinterpret_cast<const char*>(&frameNum), sizeof(frameNum));
 
 		WriteGameState(oss, nullptr);
-		raw = oss.str();
+		// take the buffer instead of copying it (a snapshot is a few hundred MB)
+		raw = std::move(oss).str();
 		ok = true;
 	} catch (const content_error& ex) {
 		LOG_L(L_ERROR, "[LSH::%s] content error \"%s\"", __func__, ex.what());

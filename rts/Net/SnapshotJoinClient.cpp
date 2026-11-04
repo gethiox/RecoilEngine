@@ -410,10 +410,16 @@ void CSnapshotJoinClient::CreateSnapshot(uint8_t requestID, uint8_t role, int32_
 	const int level = configHandler->GetInt("SnapshotCompressionLevel");
 	const bool compress = (role == SNAPSHOT_ROLE_PROVIDER);
 
-	upload->pending = std::async(std::launch::async, [raw = std::move(raw), level, compress]() {
+	// the raw snapshot is released as soon as it is hashed and compressed, not
+	// when the upload (which holds the task's state) ends
+	auto rawPtr = std::make_shared<std::string>(std::move(raw));
+
+	upload->pending = std::async(std::launch::async, [rawPtr, level, compress]() {
 		Upload::Result r;
-		r.digest = GameSnapshot::Hash(raw);
-		r.ok = !compress || (GameSnapshot::Compress(raw, r.compressed, level) && r.compressed.size() <= MAX_SNAPSHOT_SIZE);
+		r.digest = GameSnapshot::Hash(*rawPtr);
+		r.ok = !compress || (GameSnapshot::Compress(*rawPtr, r.compressed, level) && r.compressed.size() <= MAX_SNAPSHOT_SIZE);
+		rawPtr->clear();
+		rawPtr->shrink_to_fit();
 		return r;
 	});
 }
