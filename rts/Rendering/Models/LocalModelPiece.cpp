@@ -14,7 +14,7 @@ CR_REG_METADATA(LocalModelPiece, (
 	CR_MEMBER(dir),
 
 	CR_MEMBER_UNSYNCED(prevModelSpaceTra),
-	CR_MEMBER_UNSYNCED(pieceSpaceTra),
+	CR_IGNORED(pieceSpaceTra), // see Serialize
 	CR_MEMBER_UNSYNCED(modelSpaceTra),
 	CR_MEMBER_UNSYNCED(modelSpaceMat),
 
@@ -37,6 +37,7 @@ CR_REG_METADATA(LocalModelPiece, (
 	CR_IGNORED(original),
 	CR_IGNORED(lodDispLists), //FIXME GL idx!
 
+	CR_SERIALIZER(Serialize),
 	CR_POSTLOAD(PostLoad)
 ))
 
@@ -93,8 +94,12 @@ void LocalModelPiece::SetFloat3(const float3& src, float3& dst) {
 	if (blockScriptAnims)
 		return;
 
-	if (!dirty && !dst.same(src)) {
-		SetDirty();
+	// the boundaries need a recalculation whenever a value changes, whether
+	// or not the piece is already dirty (dirty is cleared by the renderer)
+	if (!dst.same(src)) {
+		if (!dirty)
+			SetDirty();
+
 		assert(localModel);
 		localModel->SetBoundariesNeedsRecalc();
 	}
@@ -108,8 +113,10 @@ void LocalModelPiece::SetFloat(const float& src, float& dst)
 	if (blockScriptAnims)
 		return;
 
-	if (!dirty && !(dst == src)) {
-		SetDirty();
+	if (!(dst == src)) {
+		if (!dirty)
+			SetDirty();
+
 		assert(localModel);
 		localModel->SetBoundariesNeedsRecalc();
 	}
@@ -321,6 +328,18 @@ bool LocalModelPiece::GetEmitDirPos(float3& emitPos, float3& emitDir) const
 	emitPos = GetModelSpaceTransform() *        original->GetEmitPos()        * WORLD_TO_OBJECT_SPACE;
 	emitDir = GetModelSpaceTransform() * float4(original->GetEmitDir(), 0.0f) * WORLD_TO_OBJECT_SPACE;
 	return true;
+}
+
+void LocalModelPiece::Serialize(creg::ISerializer* s)
+{
+	// a cache of pos, rot and scale (recomputed after a load), except for a
+	// piece whose transform a synced script froze (Spring.SetUnitPieceMatrix):
+	// then it is the transform itself
+	if (blockScriptAnims || !creg::IsSkippingUnsyncedMembers()) {
+		s->Serialize(&pieceSpaceTra.r, sizeof(pieceSpaceTra.r));
+		s->Serialize(&pieceSpaceTra.t, sizeof(pieceSpaceTra.t));
+		s->Serialize(&pieceSpaceTra.s, sizeof(pieceSpaceTra.s));
+	}
 }
 
 void LocalModelPiece::PostLoad()
