@@ -65,6 +65,7 @@ private:
 	void LoadLua(bool onlySynced, bool onlyUnsynced);
 	void LoadSkirmishAIs();
 	void LoadFinalize();
+	void Serialize(creg::ISerializer* s);
 	void PostLoad();
 
 	void KillMisc();

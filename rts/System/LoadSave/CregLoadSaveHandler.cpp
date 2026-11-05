@@ -177,6 +177,21 @@ static void SerializeSyncedGlobals(creg::ISerializer* s)
 	// unit tooltips are set and read by synced Lua
 	unitToolTipMap.Serialize(s);
 
+	// each player's last transmitted selection (NETMSG_SELECT): later commands
+	// and shares apply to it; sized by the loaded player count
+	{
+		creg::RawArchive ar(s);
+		auto& selections = selectedUnitsHandler.netSelected;
+		uint32_t numPlayers = selections.size();
+		ar.Value(numPlayers);
+
+		if (ar.IsReading())
+			selections.resize(numPlayers);
+
+		for (auto& selection: selections)
+			ar.PodContainer(selection);
+	}
+
 	if (s->IsWriting())
 		return;
 

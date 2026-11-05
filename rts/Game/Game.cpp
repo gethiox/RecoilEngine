@@ -184,7 +184,7 @@ CR_REG_METADATA(CGame, (
 
 	// FIXME: atomic type deduction
 	CR_IGNORED(loadDone),
-	CR_IGNORED(gameOver),
+	CR_IGNORED(gameOver), // see Serialize (atomic)
 
 	CR_IGNORED(gameDrawMode),
 	CR_MEMBER(showFPS),
@@ -221,6 +221,7 @@ CR_REG_METADATA(CGame, (
 	CR_IGNORED(gameInputReceiver),
 
 	// Post Load
+	CR_SERIALIZER(Serialize),
 	CR_POSTLOAD(PostLoad)
 ))
 
@@ -954,6 +955,17 @@ void CGame::LoadFinalize()
 	updateDeltaSeconds = 0.0f;
 }
 
+
+void CGame::Serialize(creg::ISerializer* s)
+{
+	// set by GameEnd, which synced Lua triggers on every client in the same
+	// frame (Spring.GameOver) and reads back (Spring.IsGameOver)
+	uint8_t over = gameOver;
+	s->SerializeInt(&over, sizeof(over));
+
+	if (!s->IsWriting())
+		gameOver = (over != 0);
+}
 
 void CGame::PostLoad()
 {
@@ -1721,6 +1733,20 @@ void CGame::StartPlayingFromSnapshot()
 	gu->startTime = gu->gameTime;
 	gu->myTeam = gu->GetMyPlayer()->team;
 	gu->myAllyTeam = teamHandler.AllyTeam(gu->myTeam);
+
+	// the loaded player may differ from the start script (a player who
+	// resigned or whose team died before the marker spectates now), as
+	// CPlayer::StartSpectating / JoinTeam would have set it
+	const bool spectator = gu->GetMyPlayer()->spectator;
+
+	gu->spectating = spectator;
+	gu->spectatingFullView = spectator;
+	gu->spectatingFullSelect = spectator;
+
+	if (!spectator) {
+		gu->myPlayingTeam = gu->myTeam;
+		gu->myPlayingAllyTeam = gu->myAllyTeam;
+	}
 
 	GameSetupDrawer::Disable();
 	CLuaUI::UpdateTeams();

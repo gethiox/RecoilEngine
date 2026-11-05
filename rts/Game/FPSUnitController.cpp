@@ -20,6 +20,26 @@
 #include "System/Misc/TracyDefs.h"
 
 
+CR_BIND(FPSUnitController, )
+CR_REG_METADATA(FPSUnitController, (
+	CR_MEMBER(targetUnit),
+	CR_MEMBER(controllee),
+	CR_IGNORED(controller), // set by the owning player's constructor
+	CR_MEMBER(viewDir),
+	CR_MEMBER(targetPos),
+	CR_MEMBER(targetDist),
+	CR_MEMBER(forward),
+	CR_MEMBER(back),
+	CR_MEMBER(left),
+	CR_MEMBER(right),
+	CR_MEMBER(mouse1),
+	CR_MEMBER(mouse2),
+	CR_MEMBER_UNSYNCED(oldHeading),
+	CR_MEMBER_UNSYNCED(oldPitch),
+	CR_MEMBER_UNSYNCED(oldState),
+	CR_MEMBER_UNSYNCED(oldDCpos)
+))
+
 FPSUnitController::FPSUnitController()
 	: targetUnit(nullptr)
 	, controllee(nullptr)
