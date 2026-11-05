@@ -1,5 +1,6 @@
 /* This file is part of the Spring engine (GPL v2 or later), see LICENSE.html */
 
+#include <algorithm>
 #include <cstdio>
 #include <memory>
 #include <sstream>
@@ -282,6 +283,7 @@ public:
 	std::vector<bool> watchExplosionDefs;   // callin masks for Explosion
 	std::vector<bool> watchAllowTargetDefs; // callin masks for AllowWeapon*Target*
 	decltype(CLuaHandle::delayedCallsByFrame) delayedCallsByFrame;
+	std::vector<std::pair<std::string, std::string>> textCommands; // Script.AddActionFallback, sorted
 
 	void Serialize(creg::ISerializer* s);
 };
@@ -297,6 +299,7 @@ CR_REG_METADATA(CLuaStateCollector, (
 	CR_MEMBER(watchExplosionDefs),
 	CR_MEMBER(watchAllowTargetDefs),
 	CR_MEMBER(delayedCallsByFrame),
+	CR_IGNORED(textCommands), // see Serialize
 	CR_SERIALIZER(Serialize)
 ))
 
@@ -318,6 +321,11 @@ void CLuaStateCollector::Read(const CSplitLuaHandle* handle) {
 	 * just a regular Lua table. So just a shallow copy is sufficient. */
 	delayedCallsByFrame = handle->syncedLuaHandle.delayedCallsByFrame;
 
+	// the chat actions gadgets registered (a C++ map, not in the Lua heap)
+	const auto& cmds = handle->syncedLuaHandle.GetTextCommands();
+	textCommands.assign(cmds.begin(), cmds.end());
+	std::sort(textCommands.begin(), textCommands.end());
+
 	// snapshots have to be equal on every client
 	if (GameSnapshot::IsActive()) {
 		creg::MakeCanonicalLuaState(L, L_GC);
@@ -337,11 +345,23 @@ void CLuaStateCollector::Write(CSplitLuaHandle* handle) {
 	handle->syncedLuaHandle.watchExplosionDefs = watchExplosionDefs;
 	handle->syncedLuaHandle.watchAllowTargetDefs = watchAllowTargetDefs;
 	handle->syncedLuaHandle.delayedCallsByFrame = delayedCallsByFrame;
+
+	spring::unordered_map<std::string, std::string> cmds;
+
+	for (const auto& e: textCommands)
+		cmds[e.first] = e.second;
+
+	handle->syncedLuaHandle.SetTextCommands(cmds);
 }
 
 void CLuaStateCollector::Serialize(creg::ISerializer* s) {
 	if (!valid)
 		return;
+
+	{
+		creg::RawArchive ar(s);
+		ar.Container(textCommands, [](creg::RawArchive& a, std::pair<std::string, std::string>& e) { a.String(e.first); a.String(e.second); });
+	}
 
 	creg::SerializeLuaState(s, &L);
 	creg::SerializeLuaThread(s, &L_GC);
@@ -608,6 +628,15 @@ static void LoadLuaState(CSplitLuaHandle* handle, creg::CInputStreamSerializer& 
 	CLuaStateCollector* lsc = static_cast<CLuaStateCollector*>(plsc);
 
 	lsc->Write(handle);
+
+	// the saving client had no (valid) synced handle: do not keep a live,
+	// empty one that engine code would treat as a running LuaRules/LuaGaia
+	if (!lsc->valid && handle != nullptr) {
+		if (handle == luaRules)
+			CLuaRules::FreeHandler();
+		else if (handle == luaGaia)
+			CLuaGaia::FreeHandler();
+	}
 
 	spring::SafeDelete(lsc);
 }
