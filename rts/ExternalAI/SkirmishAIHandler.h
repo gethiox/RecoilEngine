@@ -25,6 +25,7 @@ class CSkirmishAIHandler
 
 public:
 	static void SerializeSkirmishAIHandler(creg::ISerializer* s);
+	void Serialize(creg::ISerializer* s);
 	void PostLoad();
 
 	void ResetState();
@@ -187,6 +188,8 @@ private:
 
 	/// id -> AI instance
 	std::array<SkirmishAIData, MAX_AIS> aiInstanceData;
+	// the instance data a loading client had before the load, see Serialize
+	std::array<SkirmishAIData, MAX_AIS> preLoadInstanceData;
 
 	/// id -> AI instance library key
 	std::array<SkirmishAIKey, MAX_AIS> aiLibraryKeys;

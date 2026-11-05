@@ -65,6 +65,7 @@ add_library(engineSim STATIC
 		"${CMAKE_CURRENT_SOURCE_DIR}/Path/QTPFS/PathCache.cpp"
 		"${CMAKE_CURRENT_SOURCE_DIR}/Path/QTPFS/PathSearch.cpp"
 		"${CMAKE_CURRENT_SOURCE_DIR}/Path/QTPFS/PathManager.cpp"
+		"${CMAKE_CURRENT_SOURCE_DIR}/Path/QTPFS/PathManagerSerializer.cpp"
 		"${CMAKE_CURRENT_SOURCE_DIR}/Path/QTPFS/Registry.cpp"
 		"${CMAKE_CURRENT_SOURCE_DIR}/Path/QTPFS/Systems/PathSpeedModInfoSystem.cpp"
 		"${CMAKE_CURRENT_SOURCE_DIR}/Path/QTPFS/Systems/RemoveDeadPathsSystem.cpp"

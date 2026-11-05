@@ -3,6 +3,7 @@
 #include "3DModelPiece.hpp"
 #include "LocalModel.hpp"
 #include "Rendering/GL/myGL.h"
+#include "System/creg/Serializer.h"
 #include "System/Misc/TracyDefs.h"
 
 CR_BIND(LocalModelPiece, )
@@ -12,16 +13,16 @@ CR_REG_METADATA(LocalModelPiece, (
 	CR_MEMBER(scale),
 	CR_MEMBER(dir),
 
-	CR_MEMBER(prevModelSpaceTra),
-	CR_MEMBER(pieceSpaceTra),
-	CR_MEMBER(modelSpaceTra),
-	CR_MEMBER(modelSpaceMat),
+	CR_MEMBER_UNSYNCED(prevModelSpaceTra),
+	CR_IGNORED(pieceSpaceTra), // see Serialize
+	CR_MEMBER_UNSYNCED(modelSpaceTra),
+	CR_MEMBER_UNSYNCED(modelSpaceMat),
 
 	CR_MEMBER(colvol),
 
 	CR_IGNORED(wasUpdated),
-	CR_MEMBER(noInterpolation),
-	CR_MEMBER(dirty),
+	CR_MEMBER_UNSYNCED(noInterpolation), // reset by the renderer
+	CR_MEMBER_UNSYNCED(dirty),
 
 	CR_MEMBER(scriptSetVisible),
 	CR_MEMBER(blockScriptAnims),
@@ -36,6 +37,7 @@ CR_REG_METADATA(LocalModelPiece, (
 	CR_IGNORED(original),
 	CR_IGNORED(lodDispLists), //FIXME GL idx!
 
+	CR_SERIALIZER(Serialize),
 	CR_POSTLOAD(PostLoad)
 ))
 
@@ -92,8 +94,12 @@ void LocalModelPiece::SetFloat3(const float3& src, float3& dst) {
 	if (blockScriptAnims)
 		return;
 
-	if (!dirty && !dst.same(src)) {
-		SetDirty();
+	// the boundaries need a recalculation whenever a value changes, whether
+	// or not the piece is already dirty (dirty is cleared by the renderer)
+	if (!dst.same(src)) {
+		if (!dirty)
+			SetDirty();
+
 		assert(localModel);
 		localModel->SetBoundariesNeedsRecalc();
 	}
@@ -107,8 +113,10 @@ void LocalModelPiece::SetFloat(const float& src, float& dst)
 	if (blockScriptAnims)
 		return;
 
-	if (!dirty && !(dst == src)) {
-		SetDirty();
+	if (!(dst == src)) {
+		if (!dirty)
+			SetDirty();
+
 		assert(localModel);
 		localModel->SetBoundariesNeedsRecalc();
 	}
@@ -322,7 +330,26 @@ bool LocalModelPiece::GetEmitDirPos(float3& emitPos, float3& emitDir) const
 	return true;
 }
 
+void LocalModelPiece::Serialize(creg::ISerializer* s)
+{
+	// a cache of pos, rot and scale (recomputed after a load), except for a
+	// piece whose transform a synced script froze (Spring.SetUnitPieceMatrix):
+	// then it is the transform itself
+	if (blockScriptAnims || !creg::IsSkippingUnsyncedMembers()) {
+		s->Serialize(&pieceSpaceTra.r, sizeof(pieceSpaceTra.r));
+		s->Serialize(&pieceSpaceTra.t, sizeof(pieceSpaceTra.t));
+		s->Serialize(&pieceSpaceTra.s, sizeof(pieceSpaceTra.s));
+	}
+}
+
 void LocalModelPiece::PostLoad()
 {
 	wasUpdated = { true };
+
+	// snapshots leave out the cached transforms (which client drew what last
+	// decides when they are refreshed); recompute them from pos, rot and scale
+	if (creg::IsSkippingUnsyncedMembers()) {
+		dirty = true;
+		prevModelSpaceTra = GetModelSpaceTransform();
+	}
 }

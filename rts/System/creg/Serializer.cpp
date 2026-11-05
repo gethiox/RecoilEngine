@@ -124,6 +124,11 @@ void creg::WriteUInt(std::ostream* stream, uint64_t val)
 	WriteVarSizeUInt(stream, val);
 }
 
+static bool skipUnsyncedMembers = false;
+
+void creg::SetSkipUnsyncedMembers(bool skip) { skipUnsyncedMembers = skip; }
+bool creg::IsSkippingUnsyncedMembers() { return skipUnsyncedMembers; }
+
 //-------------------------------------------------------------------------
 // Base output serializer
 //-------------------------------------------------------------------------
@@ -161,7 +166,7 @@ void COutputStreamSerializer::SerializeObject(Class* c, void* ptr, ObjectRef* ob
 	for (uint a = 0; a < c->members.size(); a++)
 	{
 		creg::Class::Member* m = &c->members[a];
-		if (m->flags & CM_NoSerialize)
+		if ((m->flags & CM_NoSerialize) || ((m->flags & CM_Unsynced) && skipUnsyncedMembers))
 			continue;
 
 		ObjectMember om;
@@ -176,6 +181,9 @@ void COutputStreamSerializer::SerializeObject(Class* c, void* ptr, ObjectRef* ob
 		omg.members.push_back(om);
 		omg.size += om.size;
 		LOG_SL(LOG_SECTION_CREG_SERIALIZER, L_DEBUG, "Serialized %s::%s type:%s size:%d", c->name, m->name, m->type->GetName().c_str(), om.size);
+
+		if (layout != nullptr)
+			layout->push_back({mstart, mend, c->name, m->name});
 	}
 
 
@@ -187,6 +195,9 @@ void COutputStreamSerializer::SerializeObject(Class* c, void* ptr, ObjectRef* ob
 		c->CallSerializeProc(ptr, this);
 		unsigned mend = stream->tellp();
 		om.size = mend - mstart;
+
+		if (layout != nullptr)
+			layout->push_back({mstart, mend, c->name, "<Serialize>"});
 		omg.members.push_back(om);
 		omg.size += om.size;
 	}
@@ -434,7 +445,7 @@ void CInputStreamSerializer::SerializeObject(Class* c, void* ptr)
 	for (uint a = 0; a < c->members.size(); a++)
 	{
 		creg::Class::Member* m = &c->members[a];
-		if (m->flags & CM_NoSerialize)
+		if ((m->flags & CM_NoSerialize) || ((m->flags & CM_Unsynced) && skipUnsyncedMembers))
 			continue;
 
 		const unsigned oldPos = stream->tellg();

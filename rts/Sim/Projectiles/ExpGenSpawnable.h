@@ -22,9 +22,12 @@ public:
 	using GetMemberInfoFunc = bool(*)(SExpGenSpawnableMemberInfo&);
 	using SpawnableTuple = std::tuple<std::string, GetMemberInfoFunc, AllocFunc>;
 
-	CExpGenSpawnable(const float3& pos, const float3& spd);
+	CExpGenSpawnable(const float3& pos, const float3& spd, bool syncedObject);
 
 	~CExpGenSpawnable() override;
+
+	// explosion generator effects are visual only
+	bool IsSynced() const override { return false; }
 	virtual void Init(const CUnit* owner, const float3& offset);
 
 	static bool GetSpawnableMemberInfo(const std::string& spawnableName, SExpGenSpawnableMemberInfo& memberInfo);

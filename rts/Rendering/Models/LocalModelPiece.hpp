@@ -97,6 +97,7 @@ struct LocalModelPiece
 	void SavePrevModelSpaceTransform();
 	Transform GetEffectivePrevModelSpaceTransform() const;
 
+	void Serialize(creg::ISerializer* s);
 	void PostLoad();
 private:
 	mutable CMatrix44f modelSpaceMat; // transform relative to root LMP (SYNCED), chained pieceSpaceMat's

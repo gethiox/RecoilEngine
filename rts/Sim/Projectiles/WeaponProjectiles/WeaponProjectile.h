@@ -45,6 +45,7 @@ public:
 
 	void DependentDied(CObject* o) override;
 	void PostLoad();
+	void Serialize(creg::ISerializer* s);
 
 	void SetTargetObject(CWorldObject* newTarget) {
 		if (newTarget != nullptr)

@@ -35,6 +35,8 @@ public:
 	AAirMoveType(CUnit* unit);
 	virtual ~AAirMoveType() {}
 
+	void PostLoad();
+
 	virtual bool Update();
 	virtual void UpdateLanded();
 	virtual void Takeoff() {}

@@ -11,6 +11,7 @@
 #include "Sim/Misc/QuadField.h"
 #include "Sim/Misc/SmoothHeightMesh.h"
 #include "Sim/Projectiles/ExplosionGenerator.h"
+#include "System/creg/Serializer.h"
 #include "Sim/Projectiles/ProjectileMemPool.h"
 #include "Sim/Units/Unit.h"
 #include "Sim/Units/UnitDef.h"
@@ -47,8 +48,21 @@ CR_REG_METADATA(AAirMoveType, (
 
 	CR_MEMBER(lastCollidee),
 
-	CR_MEMBER(crashExpGenID)
+	CR_MEMBER_UNSYNCED(crashExpGenID), // chosen with the unsynced RNG, see PostLoad
+
+	CR_POSTLOAD(PostLoad)
 ))
+
+void AAirMoveType::PostLoad()
+{
+	if (!creg::IsSkippingUnsyncedMembers())
+		return;
+
+	const UnitDef* ud = owner->unitDef;
+
+	if (ud->GetCrashExpGenCount() > 0)
+		crashExpGenID = ud->GetCrashExpGenID(guRNG.NextInt(ud->GetCrashExpGenCount()));
+}
 
 
 

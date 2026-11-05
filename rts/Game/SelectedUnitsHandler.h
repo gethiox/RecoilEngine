@@ -20,6 +20,11 @@ struct SCommandDescription;
 class CSelectedUnitsHandler : public CObject
 {
 public:
+	CSelectedUnitsHandler(): CObject(false) {}
+
+	/// the local selection, listens to the selected units
+	bool IsSynced() const override { return false; }
+
 	void Init(unsigned numPlayers);
 	void Kill();
 	void ConfigNotify(const std::string& key, const std::string& value);

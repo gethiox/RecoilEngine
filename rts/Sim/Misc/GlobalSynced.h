@@ -45,6 +45,14 @@ public:
 	int GetMtTempNum() { return mtTempNum[ThreadPool::GetThreadNum()]++; }
 	int GetMtTempNum(int tid) { return mtTempNum[tid]++; }
 
+	/// the counters behind GetTempNum and GetMtTempNum (saved games and snapshots)
+	struct TempNumCounters {
+		int tempNum;
+		std::array<int, ThreadPool::MAX_THREADS> mtTempNum;
+	};
+	TempNumCounters GetTempNumCounters() const { return {tempNum, mtTempNum}; }
+	void SetTempNumCounters(const TempNumCounters& c) { tempNum = c.tempNum; mtTempNum = c.mtTempNum; }
+
 	// remains true until first SimFrame call
 	bool PreSimFrame() const { return (frameNum == -1); }
 
@@ -123,6 +131,9 @@ public:
 	* Whether editing of unit-, feature- and weapon-defs through Lua is enabled.
 	*/
 	bool editDefsEnabled = false;
+	/// a unit, weapon or feature def was edited through Lua (the defs are
+	/// not part of a saved game or snapshot: a joining client cannot get them)
+	bool defsEdited = false;
 
 	/**
 	* @brief LuaGaia control

@@ -243,6 +243,7 @@ public:
 	// start this unit in free fall from parent unit
 	void Drop(const float3& parentPos, const float3& parentDir, CUnit* parent);
 	void PostLoad();
+	void Serialize(creg::ISerializer* s);
 protected:
 	void ChangeTeamReset();
 	void UpdateResources();

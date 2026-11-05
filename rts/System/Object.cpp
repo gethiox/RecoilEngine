@@ -4,6 +4,8 @@
 #include "System/Object.h"
 #include "System/ContainerUtil.h"
 #include "System/creg/STL_Map.h"
+#include "System/creg/Serializer.h"
+#include <algorithm>
 #include "System/Log/ILog.h"
 #include "System/Platform/CrashHandler.h"
 
@@ -14,13 +16,68 @@ CR_REG_METADATA(CObject, (
 
 	CR_MEMBER(detached),
 
-	CR_MEMBER(listening),
-	CR_MEMBER(listeners),
-	CR_MEMBER(listenersDepTbl),
-	CR_MEMBER(listeningDepTbl)
+	// see Serialize
+	CR_IGNORED(listening),
+	CR_IGNORED(listeners),
+	CR_IGNORED(listenersDepTbl),
+	CR_IGNORED(listeningDepTbl),
+	CR_SERIALIZER(Serialize)
 ))
 
 std::atomic<std::int64_t> CObject::cur_sync_id(0);
+std::atomic<std::int64_t> CObject::cur_unsynced_id(0);
+
+
+void CObject::Serialize(creg::ISerializer* s)
+{
+	const auto mapType = creg::DeduceType<TDependenceMap>::Get();
+	const auto tblType = creg::DeduceType<TDependenceTable>::Get();
+
+	if (s->IsWriting() && creg::IsSkippingUnsyncedMembers()) {
+		// snapshots have to be identical on every client and must not refer to
+		// unsynced objects; the order of the dependence lists and empty lists
+		// only depend on which (possibly unsynced) objects were added before,
+		// and do not influence the simulation: keep only the synced objects,
+		// one list per dependence type in ascending order
+		const auto Canonical = [](const TDependenceMap& depMap, const TDependenceTable& depTbl, TDependenceMap& outMap, TDependenceTable& outTbl) {
+			// the unsynced dependence types are last, only unsynced objects use them
+			for (std::underlying_type_t<DependenceType> dt = 0; dt < DEPENDENCE_LIGHT; ++dt) {
+				const auto it = depTbl.find(dt);
+
+				if (it == depTbl.end())
+					continue;
+
+				TSyncSafeSet objs = depMap[it->second];
+				objs.erase(std::remove_if(objs.begin(), objs.end(), [](const CObject* o) { return !o->IsSynced(); }), objs.end());
+
+				if (objs.empty())
+					continue;
+
+				outTbl[dt] = outMap.size();
+				outMap.emplace_back(std::move(objs));
+			}
+		};
+
+		TDependenceMap canonListening;
+		TDependenceMap canonListeners;
+		TDependenceTable canonListeningTbl;
+		TDependenceTable canonListenersTbl;
+
+		Canonical(listening, listeningDepTbl, canonListening, canonListeningTbl);
+		Canonical(listeners, listenersDepTbl, canonListeners, canonListenersTbl);
+
+		mapType->Serialize(s, &canonListening);
+		mapType->Serialize(s, &canonListeners);
+		tblType->Serialize(s, &canonListenersTbl);
+		tblType->Serialize(s, &canonListeningTbl);
+		return;
+	}
+
+	mapType->Serialize(s, &listening);
+	mapType->Serialize(s, &listeners);
+	tblType->Serialize(s, &listenersDepTbl);
+	tblType->Serialize(s, &listeningDepTbl);
+}
 
 
 
@@ -35,7 +92,6 @@ static bool VectorEraseSorted(std::vector<CObject*>& v, CObject* o)
 }
 
 
-
 CObject::CObject() : detached(false)
 {
 	// Note1: this static var is shared between all different types of classes synced & unsynced (CUnit, CFeature, CProjectile, ...)
@@ -44,6 +100,16 @@ CObject::CObject() : detached(false)
 
 	// Use atomic fetch-and-add, so threads don't read half written data nor write old (= smaller) numbers
 	sync_id = ++cur_sync_id;
+
+	assert((sync_id + 1) > sync_id); // check for overflow
+}
+
+CObject::CObject(bool syncedObject) : detached(false)
+{
+	// unsynced objects (e.g. visual effects) are created depending on client
+	// settings; drawing their ids from the synced counter would make synced
+	// ids differ between clients (their order would still be the same)
+	sync_id = syncedObject ? (++cur_sync_id) : (UNSYNCED_ID_BASE + (++cur_unsynced_id));
 
 	assert((sync_id + 1) > sync_id); // check for overflow
 }

@@ -125,8 +125,11 @@ public:
 	};
 
 	CSolidObject();
+	/// for objects outside of the synced simulation (they get unsynced sync-ids)
+	explicit CSolidObject(bool syncedObject);
 	virtual ~CSolidObject() {}
 
+	void Serialize(creg::ISerializer* s);
 	void PostLoad();
 
 	virtual bool AddBuildPower(CUnit* builder, float amount) { return false; }
@@ -406,7 +409,7 @@ public:
 	CollisionVolume selectionVolume;
 
 	///< pieces that were last hit by a {[0] := unsynced, [1] := synced} projectile
-	const LocalModelPiece* hitModelPieces[2];
+	const LocalModelPiece* hitModelPieces[2] = {nullptr, nullptr};
 
 	///< object-local {z,x,y}-axes (in WS)
 	SyncedFloat3 frontdir =  FwdVector;

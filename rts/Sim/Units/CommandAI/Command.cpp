@@ -1,6 +1,7 @@
 /* This file is part of the Spring engine (GPL v2 or later), see LICENSE.html */
 
 #include "Command.h"
+#include "System/creg/Serializer.h"
 #include "CommandParamsPool.hpp"
 
 CommandParamsPool cmdParamsPool;
@@ -99,8 +100,17 @@ void Command::CopyParams(const Command& c) {
 
 void Command::Serialize(creg::ISerializer* s) {
 	if (s->IsWriting()) {
+		// the owning client replaces the key of a factory-built unit's timed
+		// wait by a local one (CWaitCommandsAI::AddLocalUnit); no synced code
+		// reads it, so snapshots store it as 0 on every client
+#ifdef USING_CREG
+		const bool localKey = creg::IsSkippingUnsyncedMembers() && (GetID() == CMD_WAIT) && (numParams == 2) && (GetParam(0) == CMD_WAITCODE_TIMEWAIT);
+#else
+		const bool localKey = false;
+#endif
+
 		for (unsigned int i = 0; i < numParams; i++) {
-			float p = GetParam(i);
+			float p = (localKey && i == 1) ? 0.0f : GetParam(i);
 			s->Serialize(&p, sizeof(p));
 		}
 	} else {

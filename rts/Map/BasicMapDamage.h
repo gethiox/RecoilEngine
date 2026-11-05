@@ -17,6 +17,7 @@ public:
 
 	void Init() override;
 	void Update() override;
+	void Serialize(creg::ISerializer* s) override;
 
 	bool Disabled() const override { return false; }
 

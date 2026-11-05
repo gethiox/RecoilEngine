@@ -42,6 +42,7 @@
 #include "System/SpringMath.h"
 #include "System/SpringExitCode.h"
 #include "System/SpringFormat.h"
+#include "Net/SnapshotJoinServer.h"
 #include "System/TdfParser.h"
 #include "System/StringHash.h"
 #include "System/StringUtil.h"
@@ -68,6 +69,7 @@ using netcode::RawPacket;
 
 CONFIG(int, AutohostPort).defaultValue(0).description("Which port should the engine listen on for Autohost interfact connections.");
 CONFIG(int, ServerSleepTime).defaultValue(5).description("Number of milliseconds to sleep per tick for the server thread. Lower values have marginally higher CPU load, while high values can introduce additional latency.");
+CONFIG(bool, RejoinReplacesConnection).defaultValue(true).description("A client that connects with the password of a player whose connection is still open (e.g. after the player's game crashed) replaces that connection at once, instead of being rejected until it timed out. Players without a password still have to wait for ReconnectTimeout.");
 CONFIG(int, SpeedControl).defaultValue(1).minimumValue(1).maximumValue(2)
 	.description("Sets how server adjusts speed according to player's load (CPU), 1: use average, 2: use highest");
 CONFIG(bool, AllowSpectatorJoin).defaultValue(true).dedicatedValue(false).description("allow any unauthenticated clients to join as spectator with any name, name will be prefixed with ~");
@@ -138,6 +140,7 @@ CGameServer::CGameServer(
 	myClientSetup = newClientSetup;
 	myGameData = newGameData;
 	myGameSetup = newGameSetup;
+	snapshotJoin = std::make_unique<CSnapshotJoinServer>(this);
 
 	Initialize();
 }
@@ -683,6 +686,10 @@ void CGameServer::CheckSync()
 			if (p.clientLink == nullptr || p.myState == GameParticipant::State::DISCONNECTING)
 				continue;
 
+			// frames covered by the snapshot a client joined from are never simulated by it
+			if (p.awaitingSnapshot || outstandingSyncFrame < p.syncCheckStartFrame)
+				continue;
+
 			const auto pChecksumIt = p.syncResponse.find(outstandingSyncFrame);
 
 			if (pChecksumIt == p.syncResponse.end()) {
@@ -814,6 +821,8 @@ void CGameServer::Update()
 		if (demoReader == nullptr || !HasLocalClient() || (serverFrameNum - players[localClientNumber].lastFrameResponse) < GAME_SPEED)
 			modGameTime += (tdif * internalSpeed);
 	}
+
+	snapshotJoin->Update();
 
 	if (lastPlayerInfo < (spring_gettime() - playerInfoTime)) {
 		lastPlayerInfo = spring_gettime();
@@ -1114,10 +1123,16 @@ void CGameServer::ProcessPacket(const unsigned playerNum, std::shared_ptr<const 
 			Message(spring::format(PlayerLeft, players[a].GetType(), players[a].name.c_str(), " normal quit"));
 			Broadcast(CBaseNetProtocol::Get().SendPlayerLeft(a, 1));
 			players[a].Kill("[GameServer] user exited", true);
+			snapshotJoin->PlayerLeft(a);
 			if (hostif != nullptr)
 				hostif->SendPlayerLeft(a, 1);
 			break;
 		}
+
+		case NETMSG_SNAPSHOT_DATA:
+		case NETMSG_SNAPSHOT_HASH: {
+			snapshotJoin->ProcessPacket(a, packet);
+		} break;
 
 		case NETMSG_PLAYERNAME: {
 			try {
@@ -1909,10 +1924,14 @@ void CGameServer::HandleConnectionAttempts()
 			msg >> reconnect;
 			msg >> netloss;
 
+			// trailing flag, optional
+			uint8_t snapshotJoinWanted = 0;
+			try { msg >> snapshotJoinWanted; } catch (const netcode::UnpackPacketException&) {}
+
 			if (netversion != NETWORK_VERSION)
 				throw netcode::UnpackPacketException(spring::format("Wrong network version: received %d, required %d", (int)netversion, (int)NETWORK_VERSION));
 
-			BindConnection(udpListener->AcceptConnection(), name, passwd, version, platform, false, reconnect, netloss);
+			BindConnection(udpListener->AcceptConnection(), name, passwd, version, platform, false, reconnect, netloss, snapshotJoinWanted != 0);
 		} catch (const netcode::UnpackPacketException& ex) {
 			const asio::ip::udp::endpoint endp = prev->GetEndpoint();
 			const asio::ip::address addr = endp.address();
@@ -2021,6 +2040,7 @@ void CGameServer::ServerReadNet()
 			Broadcast(CBaseNetProtocol::Get().SendPlayerLeft(player.id, 0));
 
 			player.Kill("User timeout");
+			snapshotJoin->PlayerLeft(player.id);
 
 			if (hostif != nullptr)
 				hostif->SendPlayerLeft(player.id, 0);
@@ -2097,7 +2117,9 @@ void CGameServer::ServerReadNet()
 				if (aiPacket == nullptr)
 					break;
 
-				const bool droppablePacket = (aiPacket->length <= 0 || (aiPacket->data[0] != NETMSG_SYNCRESPONSE && aiPacket->data[0] != NETMSG_KEYFRAME));
+				// snapshot transfers are bulk data requested by the server itself, not spam
+				const bool snapshotPacket = (aiPacket->length > 0 && (aiPacket->data[0] == NETMSG_SNAPSHOT_DATA || aiPacket->data[0] == NETMSG_SNAPSHOT_HASH));
+				const bool droppablePacket = !snapshotPacket && (aiPacket->length <= 0 || (aiPacket->data[0] != NETMSG_SYNCRESPONSE && aiPacket->data[0] != NETMSG_KEYFRAME));
 
 				if (forcedDropPacket && droppablePacket) {
 					++numPktsDropped;
@@ -2829,6 +2851,7 @@ void CGameServer::KickPlayer(int playerNum)
 	Broadcast(CBaseNetProtocol::Get().SendPlayerLeft(playerNum, 2));
 
 	players[playerNum].Kill("Kicked from the battle", true);
+	snapshotJoin->PlayerLeft(playerNum);
 
 	if (hostif != nullptr)
 		hostif->SendPlayerLeft(playerNum, 2);
@@ -2896,15 +2919,18 @@ void CGameServer::ResignPlayer(const int player)
 }
 
 
-bool CGameServer::CheckPlayerPassword(const int playerNum, const std::string& pw) const
+bool CGameServer::CheckPlayerPassword(const int playerNum, const std::string& pw, bool requirePassword) const
 {
 	if (playerNum >= players.size()) // new player
-		return true;
+		return !requirePassword;
 
 	const auto& opts = players[playerNum].GetAllValues();
 	const auto it = opts.find("password");
 
-	return (it == opts.end() || it->second == pw);
+	if (it == opts.end() || it->second.empty())
+		return !requirePassword;
+
+	return (it->second == pw);
 }
 
 
@@ -2942,7 +2968,8 @@ unsigned CGameServer::BindConnection(
 	const std::string& clientPlatform,
 	bool isLocal,
 	bool reconnect,
-	int netloss
+	int netloss,
+	bool snapshotJoinWanted
 ) {
 	Message(spring::format("%s attempt from %s", (reconnect ? "Reconnection" : "Connection"), clientName.c_str()));
 	Message(spring::format(" -> Version: %s [%s]", clientVersion.c_str(), clientPlatform.c_str()));
@@ -2995,8 +3022,15 @@ unsigned CGameServer::BindConnection(
 				return {"Game has already started", false, false};
 			}
 
-			if (!canReconnect || !gp.clientLink->CheckTimeout(-1))
+			if (!canReconnect || !gp.clientLink->CheckTimeout(-1)) {
+				// the player restarted (e.g. after a crash) while the server
+				// still keeps the old connection: the password proves that it
+				// is the same player, the newest connection wins
+				if (!reconnect && configHandler->GetBool("RejoinReplacesConnection") && CheckPlayerPassword(gp.id, clientPassword, true))
+					return {"", true, true};
+
 				return {"User can not reconnect", false, false};
+			}
 
 			if (!reconnect)
 				return {"", true, true};
@@ -3064,6 +3098,7 @@ unsigned CGameServer::BindConnection(
 		// prevent sending a quit message since that might kill the new connection
 		newPlayer.clientLink.reset();
 		newPlayer.Kill("Terminating connection");
+		snapshotJoin->PlayerLeft(newPlayerNumber);
 
 		if (hostif != nullptr)
 			hostif->SendPlayerLeft(newPlayerNumber, 0);
@@ -3073,8 +3108,11 @@ unsigned CGameServer::BindConnection(
 	if (newPlayer.isMidgameJoin)
 		clientLink->SendData(CBaseNetProtocol::Get().SendCreateNewPlayer(newPlayerNumber, newPlayer.spectator, newPlayer.team, newPlayer.name));
 
-	// there is an open link -> reconnect
-	if (newPlayer.clientLink != nullptr) {
+	// there is an open link and the client continues its session from another
+	// address -> reconnect; a new client (e.g. restarted right after quitting,
+	// while the old link still delivers the quit message) gets a new link and
+	// Connected() closes the old one
+	if (newPlayer.clientLink != nullptr && reconnect) {
 		newPlayer.clientLink->ReconnectTo(*clientLink);
 
 		if (udpListener != nullptr)
@@ -3091,7 +3129,13 @@ unsigned CGameServer::BindConnection(
 
 	newPlayer.Connected(clientLink, isLocal);
 	newPlayer.SendData(myGameDataPacket);
-	newPlayer.SendData(CBaseNetProtocol::Get().SendSetPlayerNum((unsigned char)newPlayerNumber));
+
+	// joining a running game from a snapshot holds the player back (no packets
+	// but the snapshot) until it is ready; CSnapshotJoinServer sends the rest
+	const bool snapshotPending = snapshotJoin->TryBegin(newPlayer, snapshotJoinWanted);
+
+	if (!snapshotPending)
+		newPlayer.SendData(CBaseNetProtocol::Get().SendSetPlayerNum((unsigned char)newPlayerNumber));
 
 	// after gamedata and playerNum, the player can start loading
 	if (demoReader == nullptr || myGameSetup->demoName.empty()) {
@@ -3109,6 +3153,14 @@ unsigned CGameServer::BindConnection(
 		}
 	}
 
+	clientLink->SetLossFactor(netloss);
+
+	if (snapshotPending) {
+		Message(spring::format(" -> Connection established (given id %i), preparing snapshot", newPlayerNumber));
+		clientLink->Flush(true);
+		return newPlayerNumber;
+	}
+
 	// inform player of the current frame
 	if (gameHasStarted) {
 		CBaseNetProtocol::PacketType progressPacket = CBaseNetProtocol::Get().SendCurrentFrameProgress(serverFrameNum);
@@ -3121,11 +3173,9 @@ unsigned CGameServer::BindConnection(
 
 	// new connection established
 	Message(spring::format(" -> Connection established (given id %i)", newPlayerNumber));
-	clientLink->SetLossFactor(netloss);
 	clientLink->Flush(!gameHasStarted);
 	return newPlayerNumber;
 }
-
 
 void CGameServer::GotChatMessage(const ChatMessage& msg)
 {

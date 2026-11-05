@@ -14,7 +14,8 @@ ILoadSaveHandler* ILoadSaveHandler::CreateHandler(const std::string& saveFile)
 {
 	const std::string& ext = FileSystem::GetExtensionLowerCase(saveFile);
 
-	if (ext == "ssf")
+	// saved game, or a raw game snapshot (see GameSnapshot; used by tests)
+	if (ext == "ssf" || ext == "srs")
 		return (new CCregLoadSaveHandler());
 	if (ext == "slsf")
 		return (new CLuaLoadSaveHandler());

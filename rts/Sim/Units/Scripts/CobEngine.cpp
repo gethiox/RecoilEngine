@@ -19,8 +19,9 @@ CR_REG_METADATA(CCobEngine, (
 	CR_MEMBER(tickRemovedThreads),
 	CR_MEMBER(runningThreadIDs),
 	CR_MEMBER(sleepingThreadIDs),
-	// always null/empty when saving
-	CR_IGNORED(waitingThreadIDs),
+	// not empty between frames: threads started by callins after the COB tick
+	// (and threads woken by animations) wait here for the next tick
+	CR_MEMBER(waitingThreadIDs),
 
 	CR_IGNORED(curThread),
 	CR_IGNORED(deferredCallins),

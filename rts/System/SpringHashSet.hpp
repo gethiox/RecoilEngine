@@ -11,6 +11,7 @@
 #include <cstdlib> // malloc
 #include <iterator>
 #include <utility>
+#include <vector>
 
 #define DCHECK_EQ_F(a, b)
 #define DCHECK_LT_F(a, b)
@@ -412,6 +413,45 @@ public:
 		_keys[it._bucket].~KeyT();
 		_num_filled -= 1;
 		return ++it;
+	}
+
+	/*
+	 * SPRING: exact layout (de)serialization, see SpringHashMap.hpp
+	 */
+	size_t layout_bucket_count() const { return _num_buckets; }
+	int layout_max_probe_length() const { return _max_probe_length; }
+	uint8_t layout_state(size_t bucket) const { return static_cast<uint8_t>(_states[bucket]); }
+	static constexpr uint8_t LAYOUT_STATE_FILLED = static_cast<uint8_t>(2);
+
+	/// clears the set and adopts the given layout; every FILLED bucket must then be set via layout_fill()
+	void layout_restore(size_t num_buckets, int max_probe_length, const std::vector<uint8_t>& states)
+	{
+		clear();
+
+		if (num_buckets != _num_buckets) {
+			::operator delete(_states);
+			::operator delete(_keys);
+
+			_states = (num_buckets > 0) ? reinterpret_cast<State*>(::operator new(num_buckets * sizeof(State))) : nullptr;
+			_keys   = (num_buckets > 0) ? reinterpret_cast<KeyT*>(::operator new(num_buckets * sizeof(KeyT))) : nullptr;
+			_num_buckets = num_buckets;
+			_mask = (num_buckets > 0) ? (num_buckets - 1) : 0;
+		}
+
+		for (size_t bucket = 0; bucket < num_buckets; ++bucket) {
+			const State st = static_cast<State>(states[bucket]);
+			_states[bucket] = (st == State::FILLED) ? State::INACTIVE : st;
+		}
+
+		_max_probe_length = max_probe_length;
+	}
+
+	/// constructs the element of a FILLED bucket of a restored layout
+	void layout_fill(size_t bucket, KeyT&& key)
+	{
+		new(_keys + bucket) KeyT(std::move(key));
+		_states[bucket] = State::FILLED;
+		_num_filled += 1;
 	}
 
 	// Remove all elements, keeping full capacity.

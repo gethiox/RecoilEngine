@@ -5,6 +5,7 @@
 #include "System/Net/LocalConnection.h"
 
 #include "NetProtocol.h"
+#include "Net/SnapshotJoinClient.h"
 #include "Game/ClientSetup.h"
 #include "Game/GlobalUnsynced.h"
 #include "Sim/Misc/GlobalConstants.h"
@@ -56,7 +57,7 @@ void CNetProtocol::InitClient(std::shared_ptr<ClientSetup> clientSetup, const st
 
 	serverConnPtr = new (serverConnMem) netcode::UDPConnection(configHandler->GetInt("SourcePort"), clientSetup->hostIP, clientSetup->hostPort);
 	serverConnPtr->Unmute();
-	serverConnPtr->SendData(CBaseNetProtocol::Get().SendAttemptConnect(userName, userPasswd, clientVersion, clientPlatform, globalConfig.networkLossFactor));
+	serverConnPtr->SendData(CBaseNetProtocol::Get().SendAttemptConnect(userName, userPasswd, clientVersion, clientPlatform, globalConfig.networkLossFactor, false, CSnapshotJoinClient::WantsSnapshotJoin(clientSetup->snapshotJoin)));
 	serverConnPtr->Flush(true);
 
 	LOG("[NetProto::%s] connecting to IP %s on port %i using name %s", __func__, clientSetup->hostIP.c_str(), clientSetup->hostPort, userName.c_str());
@@ -73,6 +74,7 @@ void CNetProtocol::InitLocalClient()
 
 void CNetProtocol::AttemptReconnect(const std::string& myVersion, const std::string& myPlatform)
 {
+	std::lock_guard<spring::spinlock> lock(serverConnMutex);
 	netcode::UDPConnection conn(*serverConnPtr);
 
 	conn.Unmute();
@@ -84,34 +86,37 @@ void CNetProtocol::AttemptReconnect(const std::string& myVersion, const std::str
 
 
 bool CNetProtocol::NeedsReconnect() {
+	std::lock_guard<spring::spinlock> lock(serverConnMutex);
 	return serverConnPtr->NeedsReconnect();
 }
 
 bool CNetProtocol::CheckTimeout(int nsecs, bool initial) const {
+	std::lock_guard<spring::spinlock> lock(serverConnMutex);
 	return serverConnPtr->CheckTimeout(nsecs, initial);
 }
 
 bool CNetProtocol::Connected() const
 {
+	std::lock_guard<spring::spinlock> lock(serverConnMutex);
 	return (serverConnPtr->GetDataReceived() > 0);
 }
 
 std::string CNetProtocol::ConnectionStr() const
 {
+	std::lock_guard<spring::spinlock> lock(serverConnMutex);
 	return serverConnPtr->GetFullAddress();
 }
 
 std::shared_ptr<const netcode::RawPacket> CNetProtocol::Peek(unsigned ahead) const
 {
-	// not called while client is loading
-	// std::lock_guard<spring::spinlock> lock(serverConnMutex);
+	// the connection may be updated by another thread (bulk transfers, see CSnapshotJoinClient)
+	std::lock_guard<spring::spinlock> lock(serverConnMutex);
 	return serverConnPtr->Peek(ahead);
 }
 
 void CNetProtocol::DeleteBufferPacketAt(unsigned index)
 {
-	// not called while client is loading
-	// std::lock_guard<spring::spinlock> lock(serverConnMutex);
+	std::lock_guard<spring::spinlock> lock(serverConnMutex);
 	return serverConnPtr->DeleteBufferPacketAt(index);
 }
 
@@ -135,6 +140,11 @@ std::shared_ptr<const netcode::RawPacket> CNetProtocol::GetData(int frameNum)
 		return ret;
 	if (ret->data[0] == NETMSG_GAMEDATA)
 		return ret;
+	// snapshot transfers are not part of the game (the history is recorded separately); requests only as stream markers
+	if (ret->data[0] == NETMSG_SNAPSHOT_DATA || ret->data[0] == NETMSG_SNAPSHOT_HASH || ret->data[0] == NETMSG_SNAPSHOT_HISTORY)
+		return ret;
+	if (ret->data[0] == NETMSG_SNAPSHOT_REQUEST && (ret->length < 3 || ret->data[2] != SNAPSHOT_ROLE_MARKER))
+		return ret;
 
 	if (demoRecordPtr->IsValid())
 		demoRecordPtr->SaveToDemo(ret->data, ret->length, GetPacketTime(frameNum));
@@ -150,6 +160,24 @@ void CNetProtocol::Send(std::shared_ptr<const netcode::RawPacket> pkt)
 	serverConnPtr->SendData(pkt);
 }
 
+
+void CNetProtocol::SetOutgoingBandwidthLimit(int bytesPerSecond)
+{
+	std::lock_guard<spring::spinlock> lock(serverConnMutex);
+	serverConnPtr->SetOutgoingBandwidthLimit(bytesPerSecond);
+}
+
+void CNetProtocol::ResetOutgoingBandwidthLimit()
+{
+	std::lock_guard<spring::spinlock> lock(serverConnMutex);
+	serverConnPtr->ResetOutgoingBandwidthLimit();
+}
+
+size_t CNetProtocol::GetOutgoingQueueBytes()
+{
+	std::lock_guard<spring::spinlock> lock(serverConnMutex);
+	return serverConnPtr->GetOutgoingQueueBytes();
+}
 
 __FORCE_ALIGN_STACK__
 void CNetProtocol::UpdateLoop()
@@ -182,6 +210,15 @@ void CNetProtocol::Close(bool flush)
 void CNetProtocol::SetDemoRecorder(CDemoRecorder&& r) { std::swap(*demoRecordPtr, r); }
 void CNetProtocol::ResetDemoRecorder() { SetDemoRecorder({}); }
 
-unsigned int CNetProtocol::GetNumWaitingServerPackets() const { return (serverConnPtr->GetPacketQueueSize()); }
-unsigned int CNetProtocol::GetNumWaitingPingPackets() const { return (serverConnPtr->GetNumQueuedPings()); }
+unsigned int CNetProtocol::GetNumWaitingServerPackets() const
+{
+	std::lock_guard<spring::spinlock> lock(serverConnMutex);
+	return (serverConnPtr->GetPacketQueueSize());
+}
+
+unsigned int CNetProtocol::GetNumWaitingPingPackets() const
+{
+	std::lock_guard<spring::spinlock> lock(serverConnMutex);
+	return (serverConnPtr->GetNumQueuedPings());
+}
 

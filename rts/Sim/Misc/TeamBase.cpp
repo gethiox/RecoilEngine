@@ -15,13 +15,13 @@
 CR_BIND(TeamBase, )
 CR_REG_METADATA(TeamBase, (
 	CR_MEMBER(leader),
-	CR_MEMBER(color),
+	CR_MEMBER_UNSYNCED(color), // widgets change it (Spring.SetTeamColor)
 	CR_MEMBER(origColor),
 	CR_MEMBER(teamStartNum),
 	CR_MEMBER(teamAllyteam),
 	CR_MEMBER(incomeMultiplier),
 	CR_MEMBER(sideName),
-	CR_MEMBER(controllerName),
+	CR_MEMBER_UNSYNCED(controllerName), // cache for the UI, see GetControllerName
 	CR_MEMBER(startPos),
 	CR_MEMBER(customValues)
 ))

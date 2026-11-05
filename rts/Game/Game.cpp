@@ -124,6 +124,8 @@
 #include "System/FileSystem/FileSystem.h"
 #include "System/LoadSave/LoadSaveHandler.h"
 #include "System/LoadSave/DemoRecorder.h"
+#include "Game/SimStateTestHooks.h"
+#include "Net/SnapshotJoinClient.h"
 #include "System/Log/ILog.h"
 #include "System/Platform/Misc.h"
 #include "System/Platform/Watchdog.h"
@@ -182,7 +184,7 @@ CR_REG_METADATA(CGame, (
 
 	// FIXME: atomic type deduction
 	CR_IGNORED(loadDone),
-	CR_IGNORED(gameOver),
+	CR_IGNORED(gameOver), // see Serialize (atomic)
 
 	CR_IGNORED(gameDrawMode),
 	CR_MEMBER(showFPS),
@@ -219,6 +221,7 @@ CR_REG_METADATA(CGame, (
 	CR_IGNORED(gameInputReceiver),
 
 	// Post Load
+	CR_SERIALIZER(Serialize),
 	CR_POSTLOAD(PostLoad)
 ))
 
@@ -291,6 +294,9 @@ CGame::~CGame()
 	ENTER_SYNCED_CODE();
 	LOG("[Game::%s][1]", __func__);
 
+	SimStateTestHooks::Kill();
+	// stops a snapshot upload (uses clientNet from another thread)
+	snapshotJoinClient.Reset();
 	RmlGui::Shutdown();
 	helper->Kill();
 	KillLua(true);
@@ -362,6 +368,7 @@ void CGame::Load(const std::string& mapFileName)
 	Watchdog::RegisterThread(WDT_LOAD);
 
 	ZoneScoped;
+	SimStateTestHooks::Init();
 
 	std::vector<std::string> contentErrors;
 
@@ -487,11 +494,20 @@ void CGame::Load(const std::string& mapFileName)
 			// Update height bounds and pathing after pregame or a saved game load.
 			{
 				ENTER_SYNCED_CODE();
-				//needed in case pre-game terraform changed the map
-				readMap->UpdateHeightBounds();
-				Watchdog::ClearTimer(WDT_LOAD);
-				pathManager->PostFinalizeRefresh();
-				Watchdog::ClearTimer(WDT_LOAD);
+				// a saved game restores both exactly (if supported by the path manager)
+				const bool exactSavedState = (saveFileHandler != nullptr && pathManager->HasExactSerialization());
+
+				if (!exactSavedState) {
+					//needed in case pre-game terraform changed the map
+					readMap->UpdateHeightBounds();
+					Watchdog::ClearTimer(WDT_LOAD);
+					pathManager->PostFinalizeRefresh();
+					Watchdog::ClearTimer(WDT_LOAD);
+				}
+
+				if (saveFileHandler != nullptr)
+					SimStateTestHooks::PostLoadGame(gs->frameNum);
+
 				LEAVE_SYNCED_CODE();
 			}
 
@@ -881,7 +897,7 @@ void CGame::LoadLua(bool dryRun, bool onlyUnsynced)
 
 	LEAVE_SYNCED_CODE();
 
-	if (!dryRun) {
+	if (!dryRun && !SimStateTestHooks::IsLuaUIDisabled()) {
 		loadscreen->SetLoadMessage("Loading LuaUI");
 		auto lock = CLoadLock::GetUniqueLock();
 		CLuaUI::LoadFreeHandler();
@@ -939,6 +955,17 @@ void CGame::LoadFinalize()
 	updateDeltaSeconds = 0.0f;
 }
 
+
+void CGame::Serialize(creg::ISerializer* s)
+{
+	// set by GameEnd, which synced Lua triggers on every client in the same
+	// frame (Spring.GameOver) and reads back (Spring.IsGameOver)
+	uint8_t over = gameOver;
+	s->SerializeInt(&over, sizeof(over));
+
+	if (!s->IsWriting())
+		gameOver = (over != 0);
+}
 
 void CGame::PostLoad()
 {
@@ -1183,6 +1210,7 @@ bool CGame::Update()
 
 	jobDispatcher.Update();
 	clientNet->Update();
+	SimStateTestHooks::Update();
 
 	// When video recording do step by step simulation, so each simframe gets a corresponding videoframe
 	// FIXME: SERVER ALREADY DOES THIS BY ITSELF
@@ -1691,6 +1719,37 @@ void CGame::StartPlaying()
 
 	if (saveFileHandler == nullptr)
 		eventHandler.GameStart();
+}
+
+void CGame::StartPlayingFromSnapshot()
+{
+	RECOIL_DETAILED_TRACY_ZONE;
+	// the synced effects of starting (playing, start positions, GameStart)
+	// are part of the loaded snapshot, only the local ones are missing
+	playing = true;
+
+	lastReadNetTime = spring_gettime();
+
+	gu->startTime = gu->gameTime;
+	gu->myTeam = gu->GetMyPlayer()->team;
+	gu->myAllyTeam = teamHandler.AllyTeam(gu->myTeam);
+
+	// the loaded player may differ from the start script (a player who
+	// resigned or whose team died before the marker spectates now), as
+	// CPlayer::StartSpectating / JoinTeam would have set it
+	const bool spectator = gu->GetMyPlayer()->spectator;
+
+	gu->spectating = spectator;
+	gu->spectatingFullView = spectator;
+	gu->spectatingFullSelect = spectator;
+
+	if (!spectator) {
+		gu->myPlayingTeam = gu->myTeam;
+		gu->myPlayingAllyTeam = gu->myAllyTeam;
+	}
+
+	GameSetupDrawer::Disable();
+	CLuaUI::UpdateTeams();
 }
 
 static const char* const tracingSimFrameName = "SimFrame";

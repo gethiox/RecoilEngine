@@ -62,6 +62,11 @@ public:
 
 	IExplosionGenerator* LoadGenerator(const char* tag, const char* pre = "");
 	IExplosionGenerator* GetGenerator(unsigned int expGenID);
+	/// the name (with prefix) a custom generator was loaded by, nullptr for standard and invalid ids
+	const char* GetGeneratorName(unsigned int expGenID) const {
+		const auto it = expGenIdentNameMap.find(expGenID);
+		return (it != expGenIdentNameMap.end()) ? it->second.data() : nullptr;
+	}
 
 	bool PredictExplosionVisible(const WeaponDef* weaponDef, const CExplosionParams& params, int allyTeamID);
 

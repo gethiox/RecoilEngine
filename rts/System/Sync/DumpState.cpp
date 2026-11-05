@@ -49,6 +49,7 @@
 #include "System/FileSystem/ArchiveScanner.h"
 #include "System/Log/ILog.h"
 #include "System/SpringHash.h"
+#include "Sim/Units/Scripts/CobOpCodes.h"
 
 static bool onlyHash = true;
 
@@ -196,6 +197,21 @@ namespace {
 	}
 }
 
+
+// CCobThread lazily rewrites CALL into REAL_CALL / LUA_CALL when first executed;
+// the outcome only depends on (constant) script names, so map it back to keep
+// dumps comparable between clients that have or have not executed some code
+static std::vector<int> NormalizedCobCode(const std::vector<int>& code)
+{
+	std::vector<int> normalized = code;
+
+	for (int& op: normalized) {
+		if (op == REAL_CALL || op == LUA_CALL)
+			op = CALL;
+	}
+
+	return normalized;
+}
 
 void DumpState(int newMinFrameNum, int newMaxFrameNum, int newFramePeriod, std::optional<bool> outputFloats, std::optional<int> historyFrame, bool serverRequest)
 {
@@ -570,7 +586,7 @@ void DumpState(int newMinFrameNum, int newMaxFrameNum, int newFramePeriod, std::
 				<< "\t\t\tid: " << tid << " t.id " << thread.GetID() << " t.wt " << thread.GetWakeTime()
 				<< " owner " << ownerID
 				<< " fn " << thread.cobFile->name
-				<< " code cs " << CheckSum(thread.cobFile->code)
+				<< " code cs " << CheckSum(NormalizedCobCode(thread.cobFile->code))
 				<< " scriptNames cs " << CheckSum(thread.cobFile->scriptNames)
 				<< " pieceNames cs " << CheckSum(thread.cobFile->pieceNames)
 				<< " scriptOffLen cs " << CheckSum(std::tie(thread.cobFile->scriptOffsets, thread.cobFile->scriptLengths))
@@ -826,16 +842,20 @@ void DumpState(int newMinFrameNum, int newMaxFrameNum, int newFramePeriod, std::
 	}
 }
 
-void DumpRNG(int newMinFrameNum, int newMaxFrameNum)
+void DumpRNG(int newMinFrameNum, int newMaxFrameNum, bool testRequest)
 {
 	static nowide::fstream file;
 	static int gMinFrameNum = -1;
 	static int gMaxFrameNum = -1;
+	// test harnesses (SimStateTestHooks) may dump without cheats
+	static bool testRequested = false;
 
 	const int oldMinFrameNum = gMinFrameNum;
 	const int oldMaxFrameNum = gMaxFrameNum;
 
-	if (!gs->cheatEnabled)
+	testRequested |= testRequest;
+
+	if (!gs->cheatEnabled && !testRequested)
 		return;
 	// check if the range is valid
 	if (newMaxFrameNum < newMinFrameNum)

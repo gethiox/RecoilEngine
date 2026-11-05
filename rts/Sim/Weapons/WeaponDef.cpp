@@ -310,6 +310,7 @@ WeaponDef::WeaponDef()
 	onlyForward = false;
 
 	damages.fromDef = true;
+	damages.defID = id;
 
 	WeaponDefs.Load(this, {});
 }
@@ -418,6 +419,7 @@ WeaponDef::WeaponDef(const LuaTable& wdTable, const std::string& name_, int id_)
 
 		damages.SetDefaultDamage(defDamage);
 		damages.fromDef = true;
+		damages.defID = id;
 
 		if (!paralyzer)
 			damages.paralyzeDamageTime = 0;

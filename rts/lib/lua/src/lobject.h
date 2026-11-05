@@ -40,7 +40,15 @@ typedef union GCObject GCObject;
 ** Common Header for all collectable objects (in macro form, to be
 ** included in other objects)
 */
-#define CommonHeader	GCObject *next; lu_byte tt; lu_byte marked
+/*
+** SPRING: hashid is a creation sequence number, used instead of the object
+** address when the object is a table key (see ltable.cpp:mainposition). It
+** makes the layout (and therefore the iteration order) of such tables
+** independent of memory addresses, so it is reproducible across processes
+** and can be restored exactly from a saved state. Strings keep their
+** content hash and do not get an id.
+*/
+#define CommonHeader	GCObject *next; lu_byte tt; lu_byte marked; lu_int32 hashid
 
 
 /*
