@@ -237,7 +237,10 @@ void CGameStateCollector::Serialize(creg::ISerializer* s)
 	s->SerializeObjectInstance(&buildingMaskMap, buildingMaskMap.GetClass());
 	s->SerializeObjectInstance(&projectileHandler, projectileHandler.GetClass());
 	CPlasmaRepulser::SerializeShieldSegmentCollectionPool(s);
-	CColorMap::SerializeColorMaps(s);
+	// the colour map pool is filled as explosion generators are parsed, by
+	// unsynced Lua too (Spring.GetCEGID): rendering data, not part of snapshots
+	if (!GameSnapshot::IsActive())
+		CColorMap::SerializeColorMaps(s);
 	// the wait commands of the local player (keys contain the player number,
 	// deadlines are wall-clock): client state, like the control groups
 	if (!GameSnapshot::IsActive())
