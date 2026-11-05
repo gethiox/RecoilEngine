@@ -412,6 +412,8 @@ class CLuaHandle : public CEventClient
 #endif
 		static void SetDevMode(bool value);
 		static bool GetDevMode() { return devMode; }
+		/// for loading a saved game: the loaded Lua states already carry the effects
+		static void RestoreDevMode(bool value) { devMode = value; }
 
 		static void HandleLuaMsg(int playerID, int script, int mode, const std::vector<std::uint8_t>& msg);
 

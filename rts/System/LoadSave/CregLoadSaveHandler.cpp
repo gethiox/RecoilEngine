@@ -25,6 +25,7 @@
 #include "Game/Players/PlayerHandler.h"
 #include "Game/UI/Groups/GroupHandler.h"
 #include "Lua/LuaGaia.h"
+#include "Lua/LuaHandle.h"
 #include "Lua/LuaRules.h"
 #include "Net/GameServer.h"
 #include "Rendering/Textures/ColorMap.h"
@@ -176,6 +177,16 @@ static void SerializeSyncedGlobals(creg::ISerializer* s)
 	}
 	// unit tooltips are set and read by synced Lua
 	unitToolTipMap.Serialize(s);
+
+	// /devlua is a synced action: the flag gates raw file access of synced
+	// Lua (the debug module it swaps is part of the saved Lua state)
+	{
+		uint8_t devMode = CLuaHandle::GetDevMode();
+		s->SerializeInt(&devMode, sizeof(devMode));
+
+		if (!s->IsWriting())
+			CLuaHandle::RestoreDevMode(devMode != 0);
+	}
 
 	// each player's last transmitted selection (NETMSG_SELECT): later commands
 	// and shares apply to it; sized by the loaded player count
