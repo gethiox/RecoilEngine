@@ -143,7 +143,7 @@ namespace QTPFS {
 		bool InitializeSearch(entt::basic_registry<QTPFS::entity> &reg, QTPFS::entity searchEntity);
 		void RemovePathSearch(entt::basic_registry<QTPFS::entity> &reg, QTPFS::entity pathEntity);
 
-		ResolvedPath ResolvePath(QTPFS::entity externalId) const;
+		ResolvedPath ResolvePath(unsigned int pathID) const;
 
 		void ReadyQueuedSearches();
 		void ProcessPathSearch(int i, bool shouldBeRaw);
@@ -180,7 +180,7 @@ namespace QTPFS {
 
         bool CanPathSearchContinue(QTPFS::PathSearch *search, QTPFS::IPath *path, QTPFS::entity &partialChainHeadEntity, QTPFS::entity pathEntity, QTPFS::entity &chainHeadEntity, bool &forceFullPath);
 
-        unsigned int ExecuteImmediateSearch(unsigned int pathId);
+        unsigned int ExecuteImmediateSearch(entt::basic_registry<QTPFS::entity>& reg, unsigned int pathId);
 
 		bool IsFinalized() const { return isFinalized; }
 
@@ -221,6 +221,7 @@ namespace QTPFS {
 		std::uint32_t pfsCheckSum;
 
 		QTPFS::entity extReserveEntity = entt::null;
+		QTPFS::entity unsReserveEntity = entt::null;
 		QTPFS::entity systemEntity = entt::null;
 
 		bool isFinalized = false;

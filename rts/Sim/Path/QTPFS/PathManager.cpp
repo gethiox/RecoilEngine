@@ -185,6 +185,7 @@ QTPFS::PathManager::PathManager() {
 
 	// reserve entity 0 so it can't be used picked up by a path by accident.
 	extReserveEntity = externalRegistry.create();
+	unsReserveEntity = unsyncedRegistry.create();
 	systemEntity = registry.create();
 
 	// Force the EnTT component storage to be created to avoid race conditions with the background worker threads.
@@ -193,6 +194,7 @@ QTPFS::PathManager::PathManager() {
 	CTimeProfiler::RegisterTimer("Sim::Path::Requests");
 
 	assert(entt::to_entity(extReserveEntity) == 0);
+	assert(entt::to_entity(unsReserveEntity) == 0);
 	assert(entt::to_entity(systemEntity) == 0);
 }
 
@@ -289,8 +291,20 @@ QTPFS::PathManager::~PathManager() {
 
 	systemGlobals.ClearComponents();
 
+	for ( auto entity : unsyncedRegistry.storage<QTPFS::entity>() ) {
+		if (unsyncedRegistry.all_of<UnsyncedIPath>(entity)) {
+			LOG("%s: UnsyncedIPath %x still active!", __func__, entt::to_integral(entity));
+			DestroyPathEntity(unsyncedRegistry, entity);
+		}
+		if (unsyncedRegistry.all_of<UnsyncedPathSearch>(entity)) {
+			LOG("%s: UnsyncedPathSearch %x still active!", __func__, entt::to_integral(entity));
+			DestroyPathSearchEntity(unsyncedRegistry, entity);
+		}
+	};
+
 	// make sure this is destroyed last to ensure entity 0 will be first picked up next time.
 	externalRegistry.destroy(extReserveEntity);
+	unsyncedRegistry.destroy(unsReserveEntity);
 	registry.destroy(systemEntity);
 
 	LOG("%s: %d entities still active!", __func__, int(registry.storage<decltype(registry)::entity_type>().free_list()));
@@ -299,6 +313,7 @@ QTPFS::PathManager::~PathManager() {
 
 	registry.clear();
 	externalRegistry.clear();
+	unsyncedRegistry.clear();
 }
 
 std::int64_t QTPFS::PathManager::Finalize() {
@@ -1046,8 +1061,21 @@ void QTPFS::PathManager::AddToPathShares(QTPFS::IPath *path, QTPFS::PathSearch *
     }
 }
 
-QTPFS::PathManager::ResolvedPath QTPFS::PathManager::ResolvePath(QTPFS::entity externalId) const
+QTPFS::PathManager::ResolvedPath QTPFS::PathManager::ResolvePath(unsigned int pathID) const
 {
+    // unsynced paths live in their own registry, their ids are tagged
+    if ((pathID & UNSYNCED_PATH_ID_BIT) != 0) {
+        const QTPFS::entity unsyncedId = QTPFS::entity(pathID & ~UNSYNCED_PATH_ID_BIT);
+
+        if (!unsyncedRegistry.valid(unsyncedId))
+            return { nullptr, entt::null, nullptr };
+
+        IPath* up = unsyncedRegistry.try_get<UnsyncedIPath>(unsyncedId);
+        return { (up != nullptr) ? &unsyncedRegistry : nullptr, (up != nullptr) ? unsyncedId : entt::null, up };
+    }
+
+    const QTPFS::entity externalId = QTPFS::entity(pathID);
+
     if (!externalRegistry.valid(externalId))
         return { nullptr, entt::null, nullptr };
 
@@ -1631,7 +1659,7 @@ void QTPFS::PathManager::DeletePath(unsigned int pathID, bool force) {
 	// Check if it is a PendingPathRequestDetails in the external registry, if so then this  is pending request that still
 	// has not been scheduled and can be straight up removed. We need this check because there isn't a referencable
 	// IPath type object needed further down.
-	if (externalRegistry.valid(pathEntity) && externalRegistry.all_of<PendingPathRequestDetails>(pathEntity)) {
+	if ((pathID & UNSYNCED_PATH_ID_BIT) == 0 && externalRegistry.valid(pathEntity) && externalRegistry.all_of<PendingPathRequestDetails>(pathEntity)) {
 		// The presence of a link to the internal regsitry means the request has been scheduled.
 		assert(!externalRegistry.any_of<InternalPathEntityId>(pathEntity));
 
@@ -1639,12 +1667,12 @@ void QTPFS::PathManager::DeletePath(unsigned int pathID, bool force) {
 		return;
 	}
 
-	auto r = ResolvePath(pathEntity);
+	auto r = ResolvePath(pathID);
 	if ( !r.path )
 		return;
 
 	// If no internal entity exists, then it can be deleted immediately.
-	if ( r.reg == &externalRegistry ) {
+	if ( r.reg != &registry ) {
 		DeletePathEntity(*r.reg, r.entity);
 		return;
 	}
@@ -1669,13 +1697,16 @@ void QTPFS::PathManager::DeletePathEntity(entt::basic_registry<QTPFS::entity> &r
 	QTPFS::entity internalEntity = entt::null;
 	QTPFS::entity externalEntity = entt::null;
 
+	// the registry the external side lives in (synced or unsynced requests)
+	entt::basic_registry<QTPFS::entity>& extReg = (&reg == &registry) ? externalRegistry : reg;
+
 	if (&reg == &registry) {
 		internalEntity = pathEntity;
 		if (const auto* link = registry.try_get<ExternalPathEntityId>(pathEntity))
             externalEntity = *link;
 	} else {
 		externalEntity = pathEntity;
-		if (const auto* link = externalRegistry.try_get<InternalPathEntityId>(pathEntity))
+		if (const auto* link = extReg.try_get<InternalPathEntityId>(pathEntity))
             internalEntity = *link;
 	}
 
@@ -1686,9 +1717,9 @@ void QTPFS::PathManager::DeletePathEntity(entt::basic_registry<QTPFS::entity> &r
 		DestroyPathEntity(registry, internalEntity);
 	}
 
-    if (externalRegistry.valid(externalEntity)) {
-        RemovePathSearch(externalRegistry, externalEntity);
-        DestroyPathEntity(externalRegistry, externalEntity);
+    if (extReg.valid(externalEntity)) {
+        RemovePathSearch(extReg, externalEntity);
+        DestroyPathEntity(extReg, externalEntity);
     }
 
 	const PathTraceMapIt pathTraceIt = pathTraces.find(entt::to_integral(internalEntity));
@@ -1776,8 +1807,11 @@ unsigned int QTPFS::PathManager::RequestPath(
 
 	assert(	sourcePoint.x != 0.f || sourcePoint.z != 0.f );
 
+	// unsynced requests must not touch the synced id space (see Registry.h)
+	entt::basic_registry<QTPFS::entity>& reg = synced ? externalRegistry : unsyncedRegistry;
+
 	returnPathId = QueueSearch
-		( externalRegistry, object, moveDef
+		( reg, object, moveDef
 		, sourcePoint, targetPoint, radius
 		, synced, immediateResult
 		, (synced && object != nullptr) );
@@ -1790,7 +1824,7 @@ unsigned int QTPFS::PathManager::RequestPath(
 		// do not have an owner otherwise InitializeSearch will attempt to share paths with the background searches,
 		// which can cause desyncs.
 		assert(object == nullptr);
-		returnPathId = ExecuteImmediateSearch(returnPathId);
+		returnPathId = ExecuteImmediateSearch(reg, returnPathId);
 	// 	auto path = GetPath(QTPFS::entity(returnPathId));
 	// 	LOG("%s: IMMEDIATE non-owner (synced=%d) pathType=%d (srcPoint=%f,%f) (dstPoint=%f,%f) radius=%f hash=%x"
 	// 			, __func__
@@ -1815,28 +1849,31 @@ unsigned int QTPFS::PathManager::RequestPath(
 	// 			);
 	}
 
+	if (!synced && returnPathId != 0)
+		returnPathId |= UNSYNCED_PATH_ID_BIT;
+
 	return returnPathId;
 }
 
-unsigned int QTPFS::PathManager::ExecuteImmediateSearch(unsigned int pathId){
+unsigned int QTPFS::PathManager::ExecuteImmediateSearch(entt::basic_registry<QTPFS::entity>& reg, unsigned int pathId){
 	RECOIL_DETAILED_TRACY_ZONE;
 	QTPFS::entity pathEntity = QTPFS::entity(pathId);
-	assert(externalRegistry.valid(pathEntity));
-	QTPFS::entity pathSearchEntity = externalRegistry.get<PathSearchRef>(pathEntity).value;
-	assert(externalRegistry.valid(pathSearchEntity));
-	InitializeSearch(externalRegistry, pathSearchEntity);
+	assert(reg.valid(pathEntity));
+	QTPFS::entity pathSearchEntity = reg.get<PathSearchRef>(pathEntity).value;
+	assert(reg.valid(pathSearchEntity));
+	InitializeSearch(reg, pathSearchEntity);
 
-	PathSearch& pathSearch = *GetSearch(externalRegistry, pathSearchEntity);
+	PathSearch& pathSearch = *GetSearch(reg, pathSearchEntity);
 	int pathType = pathSearch.GetPathType();
 	NodeLayer& nodeLayer = nodeLayers[pathType];
-	ExecuteSearch(externalRegistry, &pathSearch, nodeLayer, pathType, true);
+	ExecuteSearch(reg, &pathSearch, nodeLayer, pathType, true);
 
-	if (externalRegistry.valid(pathEntity)) {
-		IPath* path = GetPath(externalRegistry, pathEntity);
+	if (reg.valid(pathEntity)) {
+		IPath* path = GetPath(reg, pathEntity);
 		if (path != nullptr) {
 			if (pathSearch.PathWasFound()) {
-				externalRegistry.remove<PathIsTemp>(pathEntity);
-				externalRegistry.remove<PathIsDirty>(pathEntity);
+				reg.remove<PathIsTemp>(pathEntity);
+				reg.remove<PathIsDirty>(pathEntity);
 			} else {
 				pathId = 0;
 			}
@@ -1845,9 +1882,9 @@ unsigned int QTPFS::PathManager::ExecuteImmediateSearch(unsigned int pathId){
 
 	// If successful, just remove the path search, otherwise delete the path entity and its search.
 	if (pathId > 0)
-		RemovePathSearch(externalRegistry, pathEntity);
+		RemovePathSearch(reg, pathEntity);
 	else
-		DeletePathEntity(externalRegistry, pathEntity);
+		DeletePathEntity(reg, pathEntity);
 
 	return pathId;
 }
@@ -1855,14 +1892,14 @@ unsigned int QTPFS::PathManager::ExecuteImmediateSearch(unsigned int pathId){
 bool QTPFS::PathManager::PathUpdated(unsigned int pathID) {
 	RECOIL_DETAILED_TRACY_ZONE;
 
-	auto r = ResolvePath(QTPFS::entity(pathID));
+	auto r = ResolvePath(pathID);
 	return r.path && r.path->GetNumPathUpdates() > 0;
 }
 
 void QTPFS::PathManager::ClearPathUpdated(unsigned int pathID) {
 	RECOIL_DETAILED_TRACY_ZONE;
 
-	auto r = ResolvePath(QTPFS::entity(pathID));
+	auto r = ResolvePath(pathID);
 	if ( r.path ) r.path->SetNumPathUpdates(0);
 }
 
@@ -1890,12 +1927,12 @@ float3 QTPFS::PathManager::NextWayPoint(
 
 	// Check if it is a PendingPathRequestDetails in the external registry. If so then call and return a temporary waypoint
 	// because this is pending request that still needs to be scheduled.
-	if (externalRegistry.valid(pathEntity) && externalRegistry.all_of<PendingPathRequestDetails>(pathEntity)) {
+	if ((pathID & UNSYNCED_PATH_ID_BIT) == 0 && externalRegistry.valid(pathEntity) && externalRegistry.all_of<PendingPathRequestDetails>(pathEntity)) {
 		const auto& request = externalRegistry.get<PendingPathRequestDetails>(pathEntity);
 		return makeTempWaypoint(sourcePoint, request.endPos);
 	}
 
-	auto r = ResolvePath(pathEntity);
+	auto r = ResolvePath(pathID);
 	if ( !r.path )
 		return noPathPoint;
 
@@ -1984,7 +2021,7 @@ float3 QTPFS::PathManager::NextWayPoint(
 bool QTPFS::PathManager::CurrentWaypointIsUnreachable(unsigned int pathID) {
 	RECOIL_DETAILED_TRACY_ZONE;
 
-	auto r = ResolvePath(QTPFS::entity(pathID));
+	auto r = ResolvePath(pathID);
 	if ( !r.path )
 		return true;
 
@@ -2001,7 +2038,7 @@ bool QTPFS::PathManager::CurrentWaypointIsUnreachable(unsigned int pathID) {
 bool QTPFS::PathManager::NextWayPointIsUnreachable(unsigned int pathID) {
 	RECOIL_DETAILED_TRACY_ZONE;
 
-	auto r = ResolvePath(QTPFS::entity(pathID));
+	auto r = ResolvePath(pathID);
 	if ( !r.path )
 		return true;
 
@@ -2021,7 +2058,7 @@ void QTPFS::PathManager::GetPathWayPoints(
 ) const {
 	RECOIL_DETAILED_TRACY_ZONE;
 
-	auto r = ResolvePath(QTPFS::entity(pathID));
+	auto r = ResolvePath(pathID);
 	if ( !r.path )
 		return;
 

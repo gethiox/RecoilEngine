@@ -356,7 +356,10 @@ void PathManagerSerializer::IoRegistryWith(creg::RawArchive& ar, Registry& reg, 
 		return;
 	}
 
+	// clear() keeps the registry's own entities as free entries, which would
+	// shift the ids allocated after the load: empty the entity storage too
 	reg.clear();
+	reg.storage<QTPFS::entity>().clear();
 
 	entt::basic_snapshot_loader loader{reg};
 	loader.template get<QTPFS::entity>(archive);
