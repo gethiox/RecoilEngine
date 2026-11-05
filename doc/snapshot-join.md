@@ -193,8 +193,11 @@ start script still have to wait, as anyone could connect with their name.
 * Only the QTPFS path finder can serialize its state exactly; with the legacy
   path finder sources answer `UNSUPPORTED` and the joiner catches up.
 * Native (C++) skirmish AIs keep their state only on their host. A client
-  hosting one catches up instead. Lua AIs are synced gadgets and fully
-  supported.
+  hosting one catches up instead. Lua AIs are synced gadgets and would be
+  supported, but the server cannot tell them from native ones (the game
+  archive defines them, and the server does not read it), so for now every
+  client hosting an AI of any kind catches up; AI hosts are still used as
+  sources, since a snapshot contains no AI state.
 * Unsynced Lua (widgets, unsynced gadget parts) starts fresh on the joining
   client, like after `/luaui reload`.
 * Snapshots are large: about 195 MB uncompressed in a 4-player game on a

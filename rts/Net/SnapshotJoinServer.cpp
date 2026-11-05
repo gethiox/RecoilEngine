@@ -59,9 +59,12 @@ bool CSnapshotJoinServer::HostsNativeAI(int playerNum) const
 		if (!valid || ai.hostPlayer != playerNum)
 			continue;
 
-		// AIs not from the setup script were created at runtime: unknown kind
-		if (i >= setupAIs.size() || !setupAIs[i].isLuaAI)
-			return true;
+		// the server cannot tell a Lua AI (defined by the game archive, which
+		// the server does not read) from a native one, so every AI host
+		// catches up; a Lua AI host could be allowed once clients report the
+		// kind of their AIs
+		(void) setupAIs;
+		return true;
 	}
 
 	return false;
