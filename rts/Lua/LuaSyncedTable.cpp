@@ -36,8 +36,10 @@ static void PushKeyToSyncedState(lua_State* srcL, lua_State* dstL)
 			lua_pushboolean(srcL, lua_toboolean(dstL, -1));
 		} break;
 		default: {
-			const int keyCopied = LuaUtils::CopyData(srcL, dstL, 1);
-			assert(keyCopied > 0);
+			// a table, function or userdata of this state is never a key of
+			// the other one; copying it over would create objects (and take
+			// registry references) in the synced state
+			lua_pushnil(srcL);
 		} break;
 	}
 }
