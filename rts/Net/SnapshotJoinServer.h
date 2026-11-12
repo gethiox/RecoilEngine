@@ -5,6 +5,7 @@
 
 #include <array>
 #include <cstdint>
+#include <map>
 #include <memory>
 #include <string>
 #include <vector>
@@ -29,9 +30,13 @@ namespace netcode {
  *
  *  1. SNAPSHOT: the joiner is held back (no game packets) while the snapshot
  *     is created, verified and relayed.
- *  2. CATCHUP: the joiner gets the game packets from the snapshot point on,
+ *  2. ACK: the joiner has every byte and the digest; it decompresses and
+ *     checks the snapshot and reports whether it can use it. Only then does
+ *     the server commit to the snapshot (a failure here still means the
+ *     classic catch-up).
+ *  3. CATCHUP: the joiner gets the game packets from the snapshot point on,
  *     still held back from live broadcasts until it has all of them.
- *  3. HISTORY: the joiner plays live; the game history before the snapshot
+ *  4. HISTORY: the joiner plays live; the game history before the snapshot
  *     point, which it only needs for its demo, is streamed in the background.
  *
  * The snapshot point is a marker packet (NETMSG_SNAPSHOT_REQUEST with role
@@ -67,6 +72,8 @@ public:
 	void PlayerLeft(int playerNum);
 
 	bool IsSource(int playerNum) const;
+	/// a source or the joiner of a join that is still transferring
+	bool IsParticipant(int playerNum) const;
 
 private:
 	using Digest = std::array<uint8_t, 32>;
@@ -80,7 +87,7 @@ private:
 		Digest digest = {};
 	};
 
-	enum class Phase { SNAPSHOT, CATCHUP, HISTORY };
+	enum class Phase { SNAPSHOT, ACK, CATCHUP, HISTORY };
 
 	struct Join {
 		int joinerNum = -1;
@@ -101,6 +108,8 @@ private:
 
 		std::vector<Source> sources;
 		int providerNum = -1;
+		bool providerLeft = false;      // after a complete upload: nothing more is needed from it
+		int retries = 0;                // joins restarted with other sources for this joiner
 
 		std::string data;          // compressed snapshot received from the provider
 		uint32_t dataReceived = 0;
@@ -110,10 +119,17 @@ private:
 		bool verified = false;
 		spring_time startTime;
 		spring_time progressTime; // last time a digest or data arrived or data was relayed or sent
+		bool providerDone = false;        // the provider's data and digest are complete
+		spring_time providerDoneTime;
 		spring_time stallLogTime;
 	};
 
-	std::vector<int> SelectSources(const GameParticipant& joiner) const;
+	std::vector<int> SelectSources(const GameParticipant& joiner, const std::vector<int>& excluded) const;
+	/// starts a join for a held-back joiner; false if there are no suitable sources
+	bool Begin(GameParticipant& joiner, const std::vector<int>& excluded, int retries);
+	/// the provider could not deliver: once, try again with other sources
+	void Restart(Join& join, const std::string& reason);
+	void OnJoinerAck(Join& join, std::shared_ptr<const netcode::RawPacket> packet);
 	bool HostsNativeAI(int playerNum) const;
 
 	Join* FindJoin(uint8_t requestID);
@@ -124,8 +140,10 @@ private:
 	bool SendCatchup(Join& join);
 	bool SendHistory(Join& join);
 
-	/// snapshot sent and verified: tell the joiner, continue with CATCHUP
-	void Succeed(Join& join);
+	/// snapshot sent and verified: give the joiner the digest, wait for its answer
+	void SendVerified(Join& join);
+	/// the joiner can use the snapshot: continue with CATCHUP from the marker
+	void Commit(Join& join);
 	/// gives up on the snapshot: the joiner catches up the classic way
 	void Abort(Join& join, const std::string& reason);
 	void AbortSources(const Join& join);
@@ -135,6 +153,10 @@ private:
 	CGameServer* server;
 	std::vector<Join> joins;
 	uint8_t nextRequestID = 1;
+
+	std::map<int, spring_time> lastJoinTime;    // per joiner: a reconnect loop must not stall the sources
+	std::map<int, spring_time> lastSourceTime;  // per source: spread the load
+	std::map<int, spring_time> lastWarningTime; // per player: unexpected snapshot packets
 };
 
 #endif // SNAPSHOT_JOIN_SERVER_H

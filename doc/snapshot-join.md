@@ -20,7 +20,9 @@ into its demo, so its local replay is complete.
 * **No impact on other players.** Only the clients asked to provide the
   snapshot ("sources") briefly stall while serializing it. Spectators are
   preferred as sources since they do not influence the game speed; a joining
-  spectator never stalls a player.
+  spectator never stalls a player (it gets spectator sources only, so with
+  fewer than `SnapshotJoinMinSources` spectators present it catches up
+  classically).
 * **Never worse than before.** Every failure (no source, timeout,
   disconnect, digest mismatch, unsupported path finder, the joiner hosting a
   native AI, unit/weapon/feature defs edited by Lua during the game) falls
@@ -42,21 +44,27 @@ joiner               server                            sources (synced clients)
   |                                     |<-- SNAPSHOT_DATA(chunks) ------- provider
   |<-- SNAPSHOT_DATA(chunks, relayed) --|   (streamed while it arrives)
   |<-- SNAPSHOT_HASH(OK|ABORTED) -------|   (after all digests agree)
+  |--- SNAPSHOT_HASH(OK|FAILED) ------->|   (decompressed and checked locally)
   |<-- SETPLAYERNUM, progress ----------|
   |<-- game stream from the MARKER on --|   (CATCHUP, then live packets)
   |<-- SNAPSHOT_HISTORY(chunks) --------|   (stream before the marker, in the background)
 ```
 
-A join passes through three phases on the server (`CSnapshotJoinServer`):
+A join passes through four phases on the server (`CSnapshotJoinServer`):
 
 1. **SNAPSHOT.** The joiner is held back: it receives no game packets
    (`GameParticipant::awaitingSnapshot`) while the snapshot is created,
    verified and relayed.
-2. **CATCHUP.** The joiner receives the cached game stream starting at the
+2. **ACK.** The joiner has every byte and the digest: it decompresses the
+   snapshot, checks the digest and the header and answers with the same
+   message. Only a positive answer commits the server to the snapshot;
+   anything else (a failed decompression, an allocation failure, a digest
+   that does not match) is still the classic catch-up from frame 0.
+3. **CATCHUP.** The joiner receives the cached game stream starting at the
    marker, still held back from live broadcasts; once it has every cached
    packet it is released, so nothing can be missed or reordered. It only
    simulates the frames that passed since the marker.
-3. **HISTORY.** The joiner plays live. The game stream before the marker,
+4. **HISTORY.** The joiner plays live. The game stream before the marker,
    which it only needs for its demo, is sent as `SNAPSHOT_HISTORY` chunks
    (a byte stream of `[uint32 length][packet]` records) whenever the link is
    otherwise idle.
@@ -76,16 +84,33 @@ Details:
   client that is already creating a snapshot is not selected again; a request
   the server aborts never makes a source wait for its running compression.
 * All bulk transfers (snapshot upload and relay, catch-up, history) are flow
-  controlled: at most 32 kB are queued or unacknowledged on a link, so regular
-  game packets are never stuck behind bulk data, and the reliable UDP protocol
-  stays within its resend window (256 chunks).
+  controlled by the amount of data queued or unacknowledged on the link: a
+  source's upload queues at most 256 kB ahead of its own game packets and the
+  history sent to a playing joiner at most 64 kB (at the default
+  `SnapshotTransferRate` of 4 MB/s a regular packet waits for at most ~1/16 s
+  and ~1/64 s), the relay and catch-up to a joiner that is still waiting for
+  its snapshot up to 512 kB. The reliable UDP protocol keeps sending within
+  its own window of chunks in flight.
 * The server only reports success after every verifier's digest equals the
   provider's and at least `SnapshotJoinMinSources` sources (the provider plus
   confirming verifiers) stand behind the snapshot; verifiers that failed or
-  left do not count. The joiner checks the digest again after decompressing.
+  left do not count, and one that stays silent for
+  `SnapshotJoinVerifierTimeout` seconds after the provider finished does not
+  hold the join up. The joiner checks the digest again after decompressing.
+  The default of two sources means a single client's snapshot is never used
+  unverified: the snapshot is deserialized by the joiner, so the agreement of
+  independent clients is what protects it from a malicious provider (the
+  loader also checks every index and class it reads, but Lua bytecode
+  cannot be verified).
+* A provider that reports itself busy (it is still compressing an earlier
+  request) makes the server try once more with other sources. A player who
+  joined from a snapshot less than `SnapshotJoinCooldown` seconds ago catches
+  up classically (a reconnect loop must not stall the sources), a join may
+  take at most `SnapshotJoinMaxTime` seconds in total, compressed snapshots
+  are limited to 256 MB, and only the participants of a running join may
+  send snapshot packets without the server's anti-spam limits applying.
 * Snapshot transfers and the data sent to a joiner use `SnapshotTransferRate`
-  instead of the regular per-link bandwidth limit, and snapshot packets are
-  exempt from the server's anti-spam limits.
+  instead of the regular per-link bandwidth limit.
 * The server does not expect sync responses from the joiner for frames covered
   by its snapshot (`GameParticipant::syncCheckStartFrame`); from the next frame
   on it is checked like every other client.
@@ -183,8 +208,11 @@ start script still have to wait, as anyone could connect with their name.
 | `AllowSnapshotJoin` | server | `true` | offer snapshots to joining clients |
 | `RejoinReplacesConnection` | server | `true` | a player's new connection (correct password) replaces the old one at once |
 | `SnapshotJoinSources` | server | `3` | clients asked (1 provider + verifiers) |
-| `SnapshotJoinMinSources` | server | `1` | fewer suitable clients: catch up instead |
+| `SnapshotJoinMinSources` | server | `2` | fewer suitable clients: catch up instead (`1` uses a single client's snapshot unverified) |
 | `SnapshotJoinTimeout` | server | `60` | seconds without progress until falling back to catch-up |
+| `SnapshotJoinMaxTime` | server | `300` | seconds a join may take in total |
+| `SnapshotJoinVerifierTimeout` | server | `15` | seconds to wait for silent verifiers once the provider finished |
+| `SnapshotJoinCooldown` | server | `60` | seconds after a snapshot join during which the same player catches up |
 | `SnapshotTransferRate` | both | 4 MiB/s | rate of snapshot uploads and joiner downloads |
 | `SnapshotCompressionLevel` | source | `1` | LZMA2 level |
 
@@ -231,8 +259,13 @@ start script still have to wait, as anyone could connect with their name.
   restarts at once, `--kill`) and rejoins from a snapshot, opting in through
   the start script (also as spectator, `--bob-spectator`, while the game is
   paused, `--pause`, a second time in the same game, `--rejoin-twice`, with
-  a provider only, `--sources 1`, or requiring verifier confirmation,
-  `--sources 2 --min-sources 2`). Checks: the
+  a provider only, `--sources 1 --min-sources 1`, or with the default
+  verifier confirmation, `--sources 2`). The server runs with the engine's
+  defaults except where this small lobby cannot satisfy them: a joining
+  spectator only gets spectator sources and the lobby has one, so
+  `--bob-spectator` lowers `SnapshotJoinMinSources` to 1, and `--rejoin-twice`
+  rejoins within the cooldown, so it sets `SnapshotJoinCooldown` to 0 (both
+  can be given explicitly, `--min-sources`, `--cooldown`). Checks: the
   joiner simulated no frame before the snapshot and every frame after it
   matches the other clients; the snapshots of different sources are
   byte-identical and equal to what the joiner loaded (`--compare-snapshots`);

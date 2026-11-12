@@ -25,10 +25,16 @@ CONFIG(bool, AllowSnapshotJoin).defaultValue(true)
 	.description("Server: let (re)joining clients load a snapshot of the running game provided by other clients instead of re-simulating it.");
 CONFIG(int, SnapshotJoinSources).defaultValue(3).minimumValue(1).maximumValue(8)
 	.description("Server: number of clients asked for a snapshot (one provides it, the others verify its digest).");
-CONFIG(int, SnapshotJoinMinSources).defaultValue(1).minimumValue(1).maximumValue(8)
-	.description("Server: minimum number of clients that have to provide or confirm a snapshot, otherwise the joining client re-simulates the game.");
+CONFIG(int, SnapshotJoinMinSources).defaultValue(2).minimumValue(1).maximumValue(8)
+	.description("Server: minimum number of clients that have to provide or confirm a snapshot, otherwise the joining client re-simulates the game. With 1 a single client's snapshot is used unverified.");
 CONFIG(int, SnapshotJoinTimeout).defaultValue(60).minimumValue(5)
 	.description("Server: seconds a snapshot join may make no progress (no digest or data received or relayed) before falling back to re-simulating the game.");
+CONFIG(int, SnapshotJoinMaxTime).defaultValue(300).minimumValue(30)
+	.description("Server: seconds a snapshot join may take in total before falling back to re-simulating the game.");
+CONFIG(int, SnapshotJoinVerifierTimeout).defaultValue(15).minimumValue(1)
+	.description("Server: seconds to wait for the verifiers' digests once the provider's snapshot is complete; verifiers that stay silent do not count.");
+CONFIG(int, SnapshotJoinCooldown).defaultValue(60).minimumValue(0)
+	.description("Server: seconds after a snapshot join during which the same player re-simulates instead (a reconnect loop must not stall the sources).");
 CONFIG(int, SnapshotTransferRate).defaultValue(4 * 1024 * 1024).minimumValue(64 * 1024)
 	.description("Bytes per second used for transferring snapshots and the game history to a joining client.");
 
@@ -39,7 +45,10 @@ CONFIG(int, SnapshotTransferRate).defaultValue(4 * 1024 * 1024).minimumValue(64 
 static constexpr size_t RELAY_QUEUE_LIMIT = 512 * 1024;
 static constexpr size_t HISTORY_QUEUE_LIMIT = 64 * 1024;
 static constexpr uint32_t RELAY_CHUNK_SIZE = 8 * 1024;
-static constexpr uint32_t MAX_SNAPSHOT_SIZE = 1024u * 1024u * 1024u;
+static constexpr uint32_t MAX_SNAPSHOT_SIZE = 256u * 1024u * 1024u; // compressed; a 4-player game is ~15 MB
+static constexpr size_t INITIAL_RESERVE = 16u * 1024u * 1024u;
+// a client that just provided or verified is not asked again right away
+static constexpr float SOURCE_COOLDOWN_SECS = 10.0f;
 // sources further behind would make the joiner wait for them to reach the marker
 static constexpr int MAX_SOURCE_LAG = 30 * GAME_SPEED;
 
@@ -70,13 +79,17 @@ bool CSnapshotJoinServer::HostsNativeAI(int playerNum) const
 	return false;
 }
 
-std::vector<int> CSnapshotJoinServer::SelectSources(const GameParticipant& joiner) const
+std::vector<int> CSnapshotJoinServer::SelectSources(const GameParticipant& joiner, const std::vector<int>& excluded) const
 {
 	std::vector<int> specs;
 	std::vector<int> players;
 
 	for (const GameParticipant& p: server->players) {
 		if (p.id == joiner.id || p.isFromDemo || p.clientLink == nullptr)
+			continue;
+		if (std::find(excluded.begin(), excluded.end(), p.id) != excluded.end())
+			continue;
+		if (const auto it = lastSourceTime.find(p.id); it != lastSourceTime.end() && (spring_gettime() - it->second) < spring_secs(SOURCE_COOLDOWN_SECS))
 			continue;
 		if (p.myState != GameParticipant::INGAME || p.isReconn || p.awaitingSnapshot || p.desynced)
 			continue;
@@ -117,7 +130,18 @@ bool CSnapshotJoinServer::TryBegin(GameParticipant& joiner, bool clientWantsSnap
 		return false;
 	}
 
-	const std::vector<int> sourceNums = SelectSources(joiner);
+	// a client that reconnects in a loop would stall the sources every time
+	if (const auto it = lastJoinTime.find(joiner.id); it != lastJoinTime.end() && (spring_gettime() - it->second) < spring_secs(configHandler->GetInt("SnapshotJoinCooldown"))) {
+		server->Message(spring::format("[SnapshotJoin] %s joined from a snapshot less than %ds ago, catching up instead", joiner.name.c_str(), configHandler->GetInt("SnapshotJoinCooldown")), false);
+		return false;
+	}
+
+	return Begin(joiner, {}, 0);
+}
+
+bool CSnapshotJoinServer::Begin(GameParticipant& joiner, const std::vector<int>& excluded, int retries)
+{
+	const std::vector<int> sourceNums = SelectSources(joiner, excluded);
 
 	if (sourceNums.empty() || int(sourceNums.size()) < configHandler->GetInt("SnapshotJoinMinSources")) {
 		server->Message(spring::format("[SnapshotJoin] %d suitable source(s) for %s, catching up instead", int(sourceNums.size()), joiner.name.c_str()), false);
@@ -128,8 +152,10 @@ bool CSnapshotJoinServer::TryBegin(GameParticipant& joiner, bool clientWantsSnap
 	join.joinerNum = joiner.id;
 	join.requestID = nextRequestID++;
 	join.providerNum = sourceNums.front();
+	join.retries = retries;
 	join.startTime = spring_gettime();
 	join.progressTime = join.startTime;
+	lastJoinTime[joiner.id] = join.startTime;
 
 	// never reuse the id of a running join
 	while (join.requestID == 0 || FindJoin(join.requestID) != nullptr)
@@ -140,6 +166,7 @@ bool CSnapshotJoinServer::TryBegin(GameParticipant& joiner, bool clientWantsSnap
 		src.playerNum = num;
 		src.role = (num == join.providerNum) ? SNAPSHOT_ROLE_PROVIDER : SNAPSHOT_ROLE_VERIFIER;
 		join.sources.push_back(src);
+		lastSourceTime[num] = join.startTime;
 
 		// assign roles first; the marker below follows on the same ordered link
 		server->players[num].SendData(CBaseNetProtocol::Get().SendSnapshotRequest(join.requestID, src.role, -1));
@@ -188,6 +215,24 @@ bool CSnapshotJoinServer::IsSource(int playerNum) const
 }
 
 
+bool CSnapshotJoinServer::IsParticipant(int playerNum) const
+{
+	for (const Join& j: joins) {
+		if (j.phase != Phase::SNAPSHOT && j.phase != Phase::ACK)
+			continue;
+		if (j.joinerNum == playerNum)
+			return true;
+
+		for (const Source& s: j.sources) {
+			if (s.playerNum == playerNum)
+				return true;
+		}
+	}
+
+	return false;
+}
+
+
 void CSnapshotJoinServer::ProcessPacket(int playerNum, std::shared_ptr<const netcode::RawPacket> packet)
 {
 	const uint8_t msgID = packet->data[0];
@@ -199,6 +244,17 @@ void CSnapshotJoinServer::ProcessPacket(int playerNum, std::shared_ptr<const net
 	const uint8_t requestID = packet->data[headerSize];
 	Join* join = FindJoin(requestID);
 
+	// the joiner's answer to the verified snapshot
+	if (join != nullptr && join->phase == Phase::ACK && playerNum == join->joinerNum && msgID == NETMSG_SNAPSHOT_HASH) {
+		try {
+			OnJoinerAck(*join, packet);
+		} catch (const netcode::UnpackPacketException& ex) {
+			LOG_L(L_ERROR, "[SnapshotJoin] invalid snapshot packet from player %d: %s", playerNum, ex.what());
+			Abort(*join, "invalid answer from the joining client");
+		}
+		return;
+	}
+
 	// e.g. late data of a finished or aborted join
 	if (join == nullptr || join->phase != Phase::SNAPSHOT)
 		return;
@@ -206,7 +262,11 @@ void CSnapshotJoinServer::ProcessPacket(int playerNum, std::shared_ptr<const net
 	const auto it = std::find_if(join->sources.begin(), join->sources.end(), [&](const Source& s) { return (s.playerNum == playerNum); });
 
 	if (it == join->sources.end()) {
-		LOG_L(L_WARNING, "[SnapshotJoin] ignoring snapshot packet from non-source player %d", playerNum);
+		// anyone can send these; the server's input limits do not throttle them
+		if (const auto wt = lastWarningTime.find(playerNum); wt == lastWarningTime.end() || (spring_gettime() - wt->second) > spring_secs(10)) {
+			LOG_L(L_WARNING, "[SnapshotJoin] ignoring snapshot packet from non-source player %d", playerNum);
+			lastWarningTime[playerNum] = spring_gettime();
+		}
 		return;
 	}
 
@@ -218,7 +278,29 @@ void CSnapshotJoinServer::ProcessPacket(int playerNum, std::shared_ptr<const net
 	} catch (const netcode::UnpackPacketException& ex) {
 		LOG_L(L_ERROR, "[SnapshotJoin] invalid snapshot packet from player %d: %s", playerNum, ex.what());
 		Abort(*join, "invalid snapshot packet");
+	} catch (const std::bad_alloc&) {
+		LOG_L(L_ERROR, "[SnapshotJoin] out of memory while receiving a snapshot from player %d", playerNum);
+		Abort(*join, "out of memory");
 	}
+}
+
+void CSnapshotJoinServer::OnJoinerAck(Join& join, std::shared_ptr<const netcode::RawPacket> packet)
+{
+	netcode::UnpackPacket pckt(packet, 1);
+	uint8_t requestID;
+	uint8_t senderNum;
+	uint8_t status;
+
+	pckt >> requestID;
+	pckt >> senderNum;
+	pckt >> status;
+
+	if (status == SNAPSHOT_STATUS_OK) {
+		Commit(join);
+		return;
+	}
+
+	Abort(join, spring::format("the joining client could not use the snapshot (status %d)", int(status)));
 }
 
 void CSnapshotJoinServer::OnData(Join& join, int playerNum, std::shared_ptr<const netcode::RawPacket> packet)
@@ -250,7 +332,8 @@ void CSnapshotJoinServer::OnData(Join& join, int playerNum, std::shared_ptr<cons
 	}
 
 	if (join.data.empty()) {
-		join.data.reserve(totalSize);
+		// the announced size is the provider's claim; grow with the data
+		join.data.reserve(std::min<size_t>(totalSize, INITIAL_RESERVE));
 		join.dataTotal = totalSize;
 	}
 
@@ -297,8 +380,15 @@ void CSnapshotJoinServer::OnHash(Join& join, int playerNum, std::shared_ptr<cons
 		int(src.status), src.frameNum, src.compressedSize, src.digest[0], src.digest[1], src.digest[2], src.digest[3]);
 
 	if (src.status != SNAPSHOT_STATUS_OK) {
-		if (src.role == SNAPSHOT_ROLE_PROVIDER)
+		if (src.role == SNAPSHOT_ROLE_PROVIDER) {
+			// e.g. still busy with an earlier request: other sources may do
+			if (src.status == SNAPSHOT_STATUS_FAILED && join.retries == 0) {
+				Restart(join, spring::format("provider failed (status %d)", int(src.status)));
+				return;
+			}
+
 			Abort(join, spring::format("provider failed (status %d)", int(src.status)));
+		}
 
 		return;
 	}
@@ -321,10 +411,21 @@ void CSnapshotJoinServer::Verify(Join& join)
 	if (provider.status != SNAPSHOT_STATUS_OK || join.dataReceived != provider.compressedSize)
 		return;
 
-	// every verifier has to have answered (sources that disconnected were removed)
+	if (!join.providerDone) {
+		join.providerDone = true;
+		join.providerDoneTime = spring_gettime();
+	}
+
+	// every verifier has to have answered (sources that disconnected were
+	// removed); one that stays silent (frozen, crashed without the server
+	// noticing yet) does not hold the join up forever: it does not count
 	for (const Source& s: join.sources) {
-		if (s.status == 0xFF)
+		if (s.status != 0xFF)
+			continue;
+		if ((spring_gettime() - join.providerDoneTime) < spring_secs(configHandler->GetInt("SnapshotJoinVerifierTimeout")))
 			return;
+
+		server->Message(spring::format("[SnapshotJoin] request %d: verifier %s did not answer", join.requestID, server->players[s.playerNum].name.c_str()), false);
 	}
 
 	int numConfirmations = 0;
@@ -333,6 +434,7 @@ void CSnapshotJoinServer::Verify(Join& join)
 		if (s.playerNum == join.providerNum || s.status != SNAPSHOT_STATUS_OK)
 			continue;
 
+		// a different digest from a verifier is the one thing that must never be relayed as a snapshot
 		if (s.digest != provider.digest) {
 			Abort(join, spring::format("digest of %s differs from the provider's", server->players[s.playerNum].name.c_str()));
 			return;
@@ -432,6 +534,7 @@ bool CSnapshotJoinServer::SendHistory(Join& join)
 void CSnapshotJoinServer::Update()
 {
 	const spring_time timeout = spring_secs(configHandler->GetInt("SnapshotJoinTimeout"));
+	const spring_time maxTime = spring_secs(configHandler->GetInt("SnapshotJoinMaxTime"));
 
 	for (size_t i = 0; i < joins.size(); ) {
 		Join& join = joins[i];
@@ -455,11 +558,22 @@ void CSnapshotJoinServer::Update()
 					Abort(join, spring::format("timeout: received %u of %u bytes (provider status %d, announced %u), relayed %u", join.dataReceived, join.dataTotal, int(p.status), p.compressedSize, join.relayOffset));
 					break;
 				}
+				// progress alone is not enough: a trickling provider must not hold the joiner forever
+				if ((spring_gettime() - join.startTime) > maxTime) {
+					Abort(join, spring::format("took longer than %ds: received %u of %u bytes, relayed %u", configHandler->GetInt("SnapshotJoinMaxTime"), join.dataReceived, join.dataTotal, join.relayOffset));
+					break;
+				}
 
 				Verify(join);
 
-				if (joins.size() == numJoins && Relay(join))
-					Succeed(join);
+				// Verify may have aborted the join (it stays in the list, in the catch-up phase)
+				if (joins.size() == numJoins && join.phase == Phase::SNAPSHOT && Relay(join))
+					SendVerified(join);
+			} break;
+
+			case Phase::ACK: {
+				if ((spring_gettime() - join.progressTime) > timeout || (spring_gettime() - join.startTime) > maxTime)
+					Abort(join, "the joining client did not answer");
 			} break;
 
 			case Phase::CATCHUP: {
@@ -504,7 +618,14 @@ void CSnapshotJoinServer::PlayerLeft(int playerNum)
 		} else if (join.phase != Phase::SNAPSHOT) {
 			// sources are no longer needed
 		} else if (join.providerNum == playerNum) {
-			Abort(join, "providing client left");
+			const Source& provider = *std::find_if(join.sources.begin(), join.sources.end(), [&](const Source& s) { return (s.playerNum == playerNum); });
+
+			// its upload may be complete: then nothing more is needed from it
+			if (provider.status == SNAPSHOT_STATUS_OK && join.dataReceived == provider.compressedSize) {
+				join.providerLeft = true;
+			} else {
+				Abort(join, "providing client left");
+			}
 		} else {
 			const auto pred = [&](const Source& s) { return (s.playerNum == playerNum); };
 			join.sources.erase(std::remove_if(join.sources.begin(), join.sources.end(), pred), join.sources.end());
@@ -515,7 +636,7 @@ void CSnapshotJoinServer::PlayerLeft(int playerNum)
 }
 
 
-void CSnapshotJoinServer::Succeed(Join& join)
+void CSnapshotJoinServer::SendVerified(Join& join)
 {
 	GameParticipant& joiner = server->players[join.joinerNum];
 	const Source& provider = *std::find_if(join.sources.begin(), join.sources.end(), [&](const Source& s) { return (s.playerNum == join.providerNum); });
@@ -533,9 +654,27 @@ void CSnapshotJoinServer::Succeed(Join& join)
 
 	server->Message(spring::format("[SnapshotJoin] request %d: snapshot sent to %s after %.1fs", join.requestID, joiner.name.c_str(), (spring_gettime() - join.startTime).toSecsf()), false);
 
+	// the joiner decompresses and checks the snapshot now and answers with
+	// the same message; the game stream stays untouched until it does
 	joiner.clientLink->SendData(CBaseNetProtocol::Get().SendSnapshotHash(
 		join.requestID, uint8_t(join.providerNum), SNAPSHOT_STATUS_OK, join.markerFrame, uint32_t(join.data.size()), uint32_t(historySize), provider.digest.data()
 	));
+
+	join.phase = Phase::ACK;
+	join.historySize = uint32_t(historySize);
+	join.progressTime = spring_gettime();
+
+	// not needed anymore
+	join.data = {};
+	join.dataReceived = 0;
+	join.relayOffset = 0;
+	join.sources.clear();
+}
+
+void CSnapshotJoinServer::Commit(Join& join)
+{
+	GameParticipant& joiner = server->players[join.joinerNum];
+
 	joiner.clientLink->SendData(CBaseNetProtocol::Get().SendSetPlayerNum(uint8_t(join.joinerNum)));
 	joiner.clientLink->SendData(CBaseNetProtocol::Get().SendCurrentFrameProgress(server->serverFrameNum));
 	joiner.syncCheckStartFrame = join.markerFrame + 1;
@@ -543,16 +682,38 @@ void CSnapshotJoinServer::Succeed(Join& join)
 	// the game stream from the marker on, then live packets; the history before it in the background
 	join.phase = Phase::CATCHUP;
 	join.catchupIndex = join.markerIndex;
-	join.historySize = uint32_t(historySize);
+}
 
-	// not needed anymore
-	join.data = {};
-	join.sources.clear();
+void CSnapshotJoinServer::Restart(Join& join, const std::string& reason)
+{
+	GameParticipant& joiner = server->players[join.joinerNum];
+
+	server->Message(spring::format("[SnapshotJoin] request %d for %s: %s, trying other sources", join.requestID, joiner.name.c_str(), reason.c_str()), false);
+	AbortSources(join);
+
+	const int joinerNum = join.joinerNum;
+	const int retries = join.retries + 1;
+	const std::vector<int> excluded = {join.providerNum};
+
+	// Begin appends to the list: the reference is stale afterwards
+	joins.erase(joins.begin() + (&join - joins.data()));
+
+	if (Begin(joiner, excluded, retries))
+		return;
+
+	// no other sources: the classic catch-up (Abort needs a join to work on)
+	Join classic;
+	classic.joinerNum = joinerNum;
+	classic.requestID = nextRequestID++;
+	classic.startTime = spring_gettime();
+	classic.progressTime = classic.startTime;
+	joins.push_back(std::move(classic));
+	Abort(joins.back(), "no other suitable source");
 }
 
 void CSnapshotJoinServer::Abort(Join& join, const std::string& reason)
 {
-	assert(join.phase == Phase::SNAPSHOT);
+	assert(join.phase == Phase::SNAPSHOT || join.phase == Phase::ACK);
 
 	GameParticipant& joiner = server->players[join.joinerNum];
 	const uint8_t noDigest[32] = {0};
@@ -577,6 +738,9 @@ void CSnapshotJoinServer::Abort(Join& join, const std::string& reason)
 	join.catchupIndex = 0;
 	join.historySize = 0;
 	join.data = {};
+	join.dataReceived = 0;
+	join.dataTotal = 0;
+	join.relayOffset = 0;
 	join.sources.clear();
 }
 

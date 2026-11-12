@@ -2117,8 +2117,8 @@ void CGameServer::ServerReadNet()
 				if (aiPacket == nullptr)
 					break;
 
-				// snapshot transfers are bulk data requested by the server itself, not spam
-				const bool snapshotPacket = (aiPacket->length > 0 && (aiPacket->data[0] == NETMSG_SNAPSHOT_DATA || aiPacket->data[0] == NETMSG_SNAPSHOT_HASH));
+				// snapshot transfers are bulk data requested by the server itself, not spam (from anyone else they are)
+				const bool snapshotPacket = (aiPacket->length > 0 && (aiPacket->data[0] == NETMSG_SNAPSHOT_DATA || aiPacket->data[0] == NETMSG_SNAPSHOT_HASH) && snapshotJoin->IsParticipant(player.id));
 				const bool droppablePacket = !snapshotPacket && (aiPacket->length <= 0 || (aiPacket->data[0] != NETMSG_SYNCRESPONSE && aiPacket->data[0] != NETMSG_KEYFRAME));
 
 				if (forcedDropPacket && droppablePacket) {

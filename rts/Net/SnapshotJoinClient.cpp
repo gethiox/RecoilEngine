@@ -36,7 +36,7 @@ CSnapshotJoinClient snapshotJoinClient;
 // sent at SnapshotTransferRate, i.e. regular packets wait for at most ~1/16s
 static constexpr size_t UPLOAD_QUEUE_LIMIT = 256 * 1024;
 static constexpr uint32_t UPLOAD_CHUNK_SIZE = 8 * 1024;
-static constexpr uint32_t MAX_SNAPSHOT_SIZE = 1024u * 1024u * 1024u;
+static constexpr uint32_t MAX_SNAPSHOT_SIZE = 256u * 1024u * 1024u; // compressed; a 4-player game is ~15 MB
 
 
 bool CSnapshotJoinClient::WantsSnapshotJoin(int scriptValue)
@@ -79,6 +79,17 @@ void CSnapshotJoinClient::Reset()
 
 void CSnapshotJoinClient::HandlePreGamePacket(std::shared_ptr<const netcode::RawPacket> packet)
 {
+	// the server commits to the snapshot only once this client confirmed it
+	// can use it; until then every failure is still the classic catch-up
+	uint8_t ackRequestID = 0;
+	bool ackPending = false;
+
+	const auto answer = [&](uint8_t status) {
+		const uint8_t noDigest[32] = {0};
+		clientNet->Send(CBaseNetProtocol::Get().SendSnapshotHash(ackRequestID, 0xFF, status, -1, 0, 0, noDigest));
+		ackPending = false;
+	};
+
 	try {
 		if (packet->data[0] == NETMSG_SNAPSHOT_DATA) {
 			netcode::UnpackPacket pckt(packet, 3);
@@ -94,6 +105,10 @@ void CSnapshotJoinClient::HandlePreGamePacket(std::shared_ptr<const netcode::Raw
 
 			const uint32_t headerLen = 3 + 1 + 1 + 4 + 4;
 			const uint32_t length = packet->length - headerLen;
+
+			// the server tried again with other sources: a new request starts over
+			if (offset == 0 && requestID != incoming.requestID)
+				incoming = {};
 
 			if (incoming.data.empty() && offset == 0) {
 				incoming.requestID = requestID;
@@ -134,6 +149,9 @@ void CSnapshotJoinClient::HandlePreGamePacket(std::shared_ptr<const netcode::Raw
 			return;
 		}
 
+		ackRequestID = requestID;
+		ackPending = true;
+
 		const spring_time t0 = spring_gettime();
 		std::string raw;
 		Digest digest;
@@ -142,6 +160,7 @@ void CSnapshotJoinClient::HandlePreGamePacket(std::shared_ptr<const netcode::Raw
 		if (requestID != incoming.requestID || incoming.data.size() != compressedSize || !GameSnapshot::Decompress(incoming.data, raw)) {
 			LOG_L(L_ERROR, "[SnapshotJoin] incomplete or invalid snapshot, catching up instead");
 			incoming = {};
+			answer(SNAPSHOT_STATUS_FAILED);
 			return;
 		}
 
@@ -149,6 +168,7 @@ void CSnapshotJoinClient::HandlePreGamePacket(std::shared_ptr<const netcode::Raw
 
 		if (GameSnapshot::Hash(raw) != digest) {
 			LOG_L(L_ERROR, "[SnapshotJoin] snapshot digest mismatch, catching up instead");
+			answer(SNAPSHOT_STATUS_FAILED);
 			return;
 		}
 
@@ -157,8 +177,11 @@ void CSnapshotJoinClient::HandlePreGamePacket(std::shared_ptr<const netcode::Raw
 
 		if (!handler->LoadSnapshot(std::move(raw), snapshotFrame) || snapshotFrame != frameNum) {
 			LOG_L(L_ERROR, "[SnapshotJoin] unusable snapshot (frame %d, expected %d), catching up instead", snapshotFrame, frameNum);
+			answer(SNAPSHOT_STATUS_FAILED);
 			return;
 		}
+
+		answer(SNAPSHOT_STATUS_OK);
 
 		loadHandler = std::move(handler);
 		joinRequestID = requestID;
@@ -180,6 +203,9 @@ void CSnapshotJoinClient::HandlePreGamePacket(std::shared_ptr<const netcode::Raw
 		LOG_L(L_ERROR, "[SnapshotJoin] unusable snapshot (%s), catching up instead", ex.what());
 		incoming = {};
 	}
+
+	if (ackPending)
+		answer(SNAPSHOT_STATUS_FAILED);
 }
 
 ILoadSaveHandler* CSnapshotJoinClient::TakeLoadHandler()
@@ -387,8 +413,13 @@ void CSnapshotJoinClient::CreateSnapshot(uint8_t requestID, uint8_t role, int32_
 {
 	const Digest noDigest = {};
 
-	// one at a time; the server picks other sources for concurrent joins
-	if (upload != nullptr) {
+	// a compression of an aborted request may still be running
+	abandoned.erase(std::remove_if(abandoned.begin(), abandoned.end(), [](const std::future<Upload::Result>& f) {
+		return (f.wait_for(std::chrono::seconds(0)) == std::future_status::ready);
+	}), abandoned.end());
+
+	// one at a time; the server picks other sources (or tries again later)
+	if (upload != nullptr || !abandoned.empty()) {
 		SendHash(requestID, SNAPSHOT_STATUS_FAILED, gs->frameNum, 0, noDigest);
 		return;
 	}

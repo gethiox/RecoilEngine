@@ -175,7 +175,12 @@ def main():
 	ap.add_argument("--rejoin-delay", type=int, default=150, help="frames the game runs without bob")
 	ap.add_argument("--speed", type=float, default=4, help="game speed requested by alice")
 	ap.add_argument("--sources", type=int, default=3)
-	ap.add_argument("--min-sources", type=int, default=1, help="server's SnapshotJoinMinSources")
+	ap.add_argument("--min-sources", type=int, default=None,
+	                help="server's SnapshotJoinMinSources (default: the engine's 2, a verifier has to confirm; 1 with --bob-spectator, "
+	                     "a spectator only gets spectator sources and this lobby has one)")
+	ap.add_argument("--cooldown", type=int, default=None,
+	                help="server's SnapshotJoinCooldown in seconds (default: the engine's 60; 0 with --rejoin-twice, so that the second "
+	                     "rejoin uses a snapshot as well)")
 	ap.add_argument("--rejoin-twice", type=int, default=0,
 	                help="frames after the first rejoin at which bob leaves again and rejoins a second time (both from a snapshot)")
 	ap.add_argument("--bob-spectator", action="store_true", help="bob is a spectator (only spectator sources allowed)")
@@ -233,12 +238,20 @@ def main():
 		server_script = server_script.replace("[player1] { name=Bob; team=1; spectator=0;", "[player1] { name=Bob; team=1; spectator=1;")
 		server_script = server_script.replace("[team1] { teamleader=1;", "[team1] { teamleader=0;")
 
+	# the engine's defaults, except where this lobby cannot satisfy them
+	if args.min_sources is None:
+		args.min_sources = 1 if args.bob_spectator else 2
+	if args.cooldown is None:
+		args.cooldown = 0 if args.rejoin_twice else 60
+	log("server: SnapshotJoinSources=%d SnapshotJoinMinSources=%d SnapshotJoinCooldown=%d" % (args.sources, args.min_sources, args.cooldown))
+
 	procs = []
 	try:
 		sd = mkdir("server")
 		write(os.path.join(sd, "script.txt"), server_script)
 		write(os.path.join(sd, "springsettings.cfg"),
-		      "AllowSnapshotJoin = %d\nSnapshotJoinSources = %d\nSnapshotJoinMinSources = %d\nServerRecordDemos = 1\nLogFlushLevel = 0\n" % (0 if args.no_snapshot else 1, args.sources, args.min_sources))
+		      "AllowSnapshotJoin = %d\nSnapshotJoinSources = %d\nSnapshotJoinMinSources = %d\nSnapshotJoinCooldown = %d\nServerRecordDemos = 1\nLogFlushLevel = 0\n"
+		      % (0 if args.no_snapshot else 1, args.sources, args.min_sources, args.cooldown))
 		server = Proc("server", engine_cmd(args.dedicated, sd, os.path.join(sd, "script.txt")), sd)
 		procs.append(server)
 		time.sleep(2)
