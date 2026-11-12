@@ -85,12 +85,12 @@ Details:
   the server aborts never makes a source wait for its running compression.
 * All bulk transfers (snapshot upload and relay, catch-up, history) are flow
   controlled by the amount of data queued or unacknowledged on the link: a
-  source's upload queues at most 256 kB ahead of its own game packets and the
-  history sent to a playing joiner at most 64 kB (at the default
-  `SnapshotTransferRate` of 4 MB/s a regular packet waits for at most ~1/16 s
-  and ~1/64 s), the relay and catch-up to a joiner that is still waiting for
-  its snapshot up to 512 kB. The reliable UDP protocol keeps sending within
-  its own window of chunks in flight.
+  source's upload and the history sent to a playing joiner queue at most
+  64 kB ahead of the client's own game packets (at the default
+  `SnapshotTransferRate` of 4 MB/s a regular packet waits for at most
+  ~1/64 s), the relay and catch-up to a joiner that is still waiting for its
+  snapshot up to 512 kB. The reliable UDP protocol keeps sending within its
+  own window of chunks in flight.
 * The server only reports success after every verifier's digest equals the
   provider's and at least `SnapshotJoinMinSources` sources (the provider plus
   confirming verifiers) stand behind the snapshot; verifiers that failed or
@@ -209,7 +209,7 @@ start script still have to wait, as anyone could connect with their name.
 | `RejoinReplacesConnection` | server | `true` | a player's new connection (correct password) replaces the old one at once |
 | `SnapshotJoinSources` | server | `3` | clients asked (1 provider + verifiers) |
 | `SnapshotJoinMinSources` | server | `2` | fewer suitable clients: catch up instead (`1` uses a single client's snapshot unverified) |
-| `SnapshotJoinTimeout` | server | `60` | seconds without progress until falling back to catch-up |
+| `SnapshotJoinTimeout` | server | `60` | seconds without progress from the sources until falling back to catch-up (afterwards only `SnapshotJoinMaxTime` bounds a slow joiner) |
 | `SnapshotJoinMaxTime` | server | `300` | seconds a join may take in total |
 | `SnapshotJoinVerifierTimeout` | server | `15` | seconds to wait for silent verifiers once the provider finished |
 | `SnapshotJoinCooldown` | server | `60` | seconds after a snapshot join during which the same player catches up |

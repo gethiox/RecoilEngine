@@ -33,8 +33,8 @@ CONFIG(int, SnapshotCompressionLevel).defaultValue(1).minimumValue(0).maximumVal
 CSnapshotJoinClient snapshotJoinClient;
 
 // bulk data queued ahead of this client's regular packets (see CConnection::GetOutgoingQueueBytes);
-// sent at SnapshotTransferRate, i.e. regular packets wait for at most ~1/16s
-static constexpr size_t UPLOAD_QUEUE_LIMIT = 256 * 1024;
+// sent at SnapshotTransferRate, i.e. regular packets wait for at most ~1/64s
+static constexpr size_t UPLOAD_QUEUE_LIMIT = 64 * 1024;
 static constexpr uint32_t UPLOAD_CHUNK_SIZE = 8 * 1024;
 static constexpr uint32_t MAX_SNAPSHOT_SIZE = 256u * 1024u * 1024u; // compressed; a 4-player game is ~15 MB
 
@@ -63,6 +63,11 @@ void CSnapshotJoinClient::Reset()
 		LOG_L(L_WARNING, "[SnapshotJoin] the game ended before its history was received (%u of %u bytes), the demo is incomplete", history.receivedSize, history.expectedSize);
 
 	assignedRoles.clear();
+	ForgetJoin();
+}
+
+void CSnapshotJoinClient::ForgetJoin()
+{
 	incoming = {};
 	loadHandler.reset();
 	joinRequestID = 0;
@@ -70,6 +75,21 @@ void CSnapshotJoinClient::Reset()
 	joinState = JoinState::NONE;
 	gameIDAnnounced = false;
 	history = {};
+}
+
+void CSnapshotJoinClient::PreGameEnded()
+{
+	// a snapshot (or part of one) that no game took: the connection attempt
+	// was given up, the next one starts from nothing
+	if (loadHandler != nullptr || !incoming.data.empty())
+		ForgetJoin();
+}
+
+void CSnapshotJoinClient::ConnectionLost()
+{
+	// the connection is about to be replaced: nothing may use it from the upload thread
+	StopUpload(false);
+	assignedRoles.clear();
 }
 
 
@@ -144,8 +164,11 @@ void CSnapshotJoinClient::HandlePreGamePacket(std::shared_ptr<const netcode::Raw
 		pckt >> digestBytes;
 
 		if (status != SNAPSHOT_STATUS_OK) {
+			// also after a snapshot was verified and loaded: the server gave up
+			// on the join (e.g. our acknowledgement did not reach it in time),
+			// so the game continues from its start like for everyone else
 			LOG("[SnapshotJoin] the server could not provide a snapshot, catching up instead");
-			incoming = {};
+			ForgetJoin();
 			return;
 		}
 
@@ -466,8 +489,16 @@ void CSnapshotJoinClient::CreateSnapshot(uint8_t requestID, uint8_t role, int32_
 
 	upload->pending = std::async(std::launch::async, [rawPtr, level, compress]() {
 		Upload::Result r;
-		r.digest = GameSnapshot::Hash(*rawPtr);
-		r.ok = !compress || (GameSnapshot::Compress(*rawPtr, r.compressed, level) && r.compressed.size() <= MAX_SNAPSHOT_SIZE);
+
+		try {
+			r.digest = GameSnapshot::Hash(*rawPtr);
+			r.ok = !compress || (GameSnapshot::Compress(*rawPtr, r.compressed, level) && r.compressed.size() <= MAX_SNAPSHOT_SIZE);
+		} catch (const std::exception& ex) {
+			// e.g. out of memory for the compressed copy
+			LOG_L(L_ERROR, "[SnapshotJoin] could not compress the snapshot (%s)", ex.what());
+			r.ok = false;
+		}
+
 		rawPtr->clear();
 		rawPtr->shrink_to_fit();
 		return r;
@@ -490,7 +521,12 @@ void CSnapshotJoinClient::Update()
 		if (upload->pending.wait_for(0ms) != std::future_status::ready)
 			return;
 
-		upload->result = upload->pending.get();
+		try {
+			upload->result = upload->pending.get();
+		} catch (const std::exception& ex) {
+			LOG_L(L_ERROR, "[SnapshotJoin] could not compress the snapshot (%s)", ex.what());
+			upload->result = {};
+		}
 	}
 
 	Upload& u = *upload;
@@ -521,7 +557,14 @@ void CSnapshotJoinClient::Update()
 	if (!u.done)
 		return;
 
-	LOG("[SnapshotJoin] request %d: snapshot uploaded", u.requestID);
+	if (u.failed) {
+		// the server gives the join to other sources (or up)
+		LOG_L(L_ERROR, "[SnapshotJoin] request %d: upload failed", u.requestID);
+		SendHash(u.requestID, SNAPSHOT_STATUS_FAILED, u.frameNum, 0, Digest{});
+	} else {
+		LOG("[SnapshotJoin] request %d: snapshot uploaded", u.requestID);
+	}
+
 	StopUpload(true);
 }
 
@@ -529,6 +572,22 @@ void CSnapshotJoinClient::UploadLoop(Upload& u)
 {
 	Threading::SetThreadName("snapshot-upload");
 
+	// an exception must not escape the thread (that would end the process)
+	try {
+		UploadLoopBody(u);
+	} catch (const std::exception& ex) {
+		LOG_L(L_ERROR, "[SnapshotJoin] request %d: upload thread failed (%s)", u.requestID, ex.what());
+		u.failed = true;
+	} catch (...) {
+		LOG_L(L_ERROR, "[SnapshotJoin] request %d: upload thread failed", u.requestID);
+		u.failed = true;
+	}
+
+	u.done = true;
+}
+
+void CSnapshotJoinClient::UploadLoopBody(Upload& u)
+{
 	const std::string& data = u.result.compressed;
 	spring_time progressTime = spring_gettime();
 	uint32_t progressOffset = u.offset;
@@ -564,8 +623,6 @@ void CSnapshotJoinClient::UploadLoop(Upload& u)
 
 		spring_msecs(2).sleep(true);
 	}
-
-	u.done = true;
 }
 
 void CSnapshotJoinClient::StopUpload(bool waitForCompression)

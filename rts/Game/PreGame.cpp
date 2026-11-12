@@ -103,6 +103,9 @@ CPreGame::~CPreGame()
 	agui::gui->Clean();
 	#endif
 
+	// a snapshot no game took (the normal case: CGame has it by now)
+	snapshotJoinClient.PreGameEnded();
+
 	pregame = nullptr;
 }
 

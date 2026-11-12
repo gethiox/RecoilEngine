@@ -28,7 +28,7 @@ CONFIG(int, SnapshotJoinSources).defaultValue(3).minimumValue(1).maximumValue(8)
 CONFIG(int, SnapshotJoinMinSources).defaultValue(2).minimumValue(1).maximumValue(8)
 	.description("Server: minimum number of clients that have to provide or confirm a snapshot, otherwise the joining client re-simulates the game. With 1 a single client's snapshot is used unverified.");
 CONFIG(int, SnapshotJoinTimeout).defaultValue(60).minimumValue(5)
-	.description("Server: seconds a snapshot join may make no progress (no digest or data received or relayed) before falling back to re-simulating the game.");
+	.description("Server: seconds a snapshot join may make no progress (no digest or data received from the sources) before falling back to re-simulating the game; once the provider delivered, only SnapshotJoinMaxTime applies.");
 CONFIG(int, SnapshotJoinMaxTime).defaultValue(300).minimumValue(30)
 	.description("Server: seconds a snapshot join may take in total before falling back to re-simulating the game.");
 CONFIG(int, SnapshotJoinVerifierTimeout).defaultValue(15).minimumValue(1)
@@ -553,7 +553,10 @@ void CSnapshotJoinServer::Update()
 
 		switch (join.phase) {
 			case Phase::SNAPSHOT: {
-				if ((spring_gettime() - join.progressTime) > timeout) {
+				// the progress timeout protects the sources: once the provider
+				// has delivered, a slow joiner (e.g. still checksumming its
+				// archives, so not reading) only holds up its own join (maxTime)
+				if (!join.providerDone && (spring_gettime() - join.progressTime) > timeout) {
 					const Source& p = *std::find_if(join.sources.begin(), join.sources.end(), [&](const Source& s) { return (s.playerNum == join.providerNum); });
 					Abort(join, spring::format("timeout: received %u of %u bytes (provider status %d, announced %u), relayed %u", join.dataReceived, join.dataTotal, int(p.status), p.compressedSize, join.relayOffset));
 					break;
@@ -572,7 +575,9 @@ void CSnapshotJoinServer::Update()
 			} break;
 
 			case Phase::ACK: {
-				if ((spring_gettime() - join.progressTime) > timeout || (spring_gettime() - join.startTime) > maxTime)
+				// loading a snapshot takes seconds, a joiner that stalls here
+				// holds up nobody else
+				if ((spring_gettime() - join.startTime) > maxTime)
 					Abort(join, "the joining client did not answer");
 			} break;
 

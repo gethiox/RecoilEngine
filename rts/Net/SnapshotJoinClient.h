@@ -71,11 +71,17 @@ public:
 
 	/// stops everything (an upload in progress), forgets all state; called when the game ends
 	void Reset();
+	/// the connection attempt ended without a game taking the snapshot: forgets it
+	void PreGameEnded();
+	/// the connection is being replaced by a local one: stops an upload using it
+	void ConnectionLost();
 
 private:
 	void CreateSnapshot(uint8_t requestID, uint8_t role, int32_t markerFrame);
 	void SendHash(uint8_t requestID, uint8_t status, int32_t frameNum, uint32_t compressedSize, const Digest& digest);
 
+	/// forgets a join (received data, a loaded snapshot, the history state)
+	void ForgetJoin();
 	/// the snapshot's own marker in the game stream (joining client)
 	void HandleJoinMarker(int32_t markerFrame);
 	void AddHistoryPacket(const uint8_t* data, uint32_t length, CGame* game);
@@ -125,10 +131,12 @@ private:
 		std::thread thread;
 		std::atomic<bool> stop = {false};
 		std::atomic<bool> done = {false};
+		std::atomic<bool> failed = {false};
 		uint32_t offset = 0;
 	};
 
 	static void UploadLoop(Upload& u);
+	static void UploadLoopBody(Upload& u);
 	/// stops the upload; an unfinished compression is only waited for if asked to
 	void StopUpload(bool waitForCompression);
 
