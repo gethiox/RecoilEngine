@@ -126,7 +126,9 @@ bool GameSnapshot::Decompress(const std::string& compressed, std::string& raw, s
 
 	memcpy(&rawSize, compressed.data(), sizeof(rawSize));
 
-	if (rawSize > maxRawSize)
+	// the size is the sender's claim: bound the allocation by it and by what
+	// LZMA2 could possibly have produced from this much input
+	if (rawSize > maxRawSize || rawSize > uint64_t(compressed.size()) * 128)
 		return false;
 
 	raw.resize(rawSize);

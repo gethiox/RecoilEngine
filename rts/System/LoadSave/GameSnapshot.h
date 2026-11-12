@@ -33,7 +33,7 @@ namespace GameSnapshot {
 	static constexpr const char* MAGIC = "RECOIL-GAME-SNAPSHOT-1";
 
 	/// maximum accepted size of an uncompressed snapshot
-	static constexpr size_t MAX_RAW_SIZE = size_t(4) << 30;
+	static constexpr size_t MAX_RAW_SIZE = size_t(2) << 30;
 
 	/// serialize the current state; only valid between two simulation frames
 	bool Write(std::string& raw);
