@@ -79,7 +79,7 @@ bool CSnapshotJoinServer::HostsNativeAI(int playerNum) const
 	return false;
 }
 
-std::vector<int> CSnapshotJoinServer::SelectSources(const GameParticipant& joiner, const std::vector<int>& excluded) const
+std::vector<int> CSnapshotJoinServer::SelectSources(const GameParticipant& joiner, const std::vector<int>& excluded, bool retry) const
 {
 	std::vector<int> specs;
 	std::vector<int> players;
@@ -89,7 +89,12 @@ std::vector<int> CSnapshotJoinServer::SelectSources(const GameParticipant& joine
 			continue;
 		if (std::find(excluded.begin(), excluded.end(), p.id) != excluded.end())
 			continue;
-		if (const auto it = lastSourceTime.find(p.id); it != lastSourceTime.end() && (spring_gettime() - it->second) < spring_secs(SOURCE_COOLDOWN_SECS))
+		// the agreement of independent clients is what protects the joiner from
+		// a forged snapshot: clients admitted without a password do not count
+		if (p.unauthenticated)
+			continue;
+		// a retry asks the sources of the failed attempt again (they are the ones in cooldown)
+		if (const auto it = lastSourceTime.find(p.id); !retry && it != lastSourceTime.end() && (spring_gettime() - it->second) < spring_secs(SOURCE_COOLDOWN_SECS))
 			continue;
 		if (p.myState != GameParticipant::INGAME || p.isReconn || p.awaitingSnapshot || p.desynced)
 			continue;
@@ -130,6 +135,13 @@ bool CSnapshotJoinServer::TryBegin(GameParticipant& joiner, bool clientWantsSnap
 		return false;
 	}
 
+	// state of an earlier join of this player number; the frames this client
+	// may still report start after the current one
+	joiner.syncCheckStartFrame = 0;
+	joiner.lateSyncChecks = -1;
+	joiner.lateSyncMisses = 0;
+	joiner.lastSyncResponseFrame = server->serverFrameNum;
+
 	// a client that reconnects in a loop would stall the sources every time
 	if (const auto it = lastJoinTime.find(joiner.id); it != lastJoinTime.end() && (spring_gettime() - it->second) < spring_secs(configHandler->GetInt("SnapshotJoinCooldown"))) {
 		server->Message(spring::format("[SnapshotJoin] %s joined from a snapshot less than %ds ago, catching up instead", joiner.name.c_str(), configHandler->GetInt("SnapshotJoinCooldown")), false);
@@ -141,7 +153,7 @@ bool CSnapshotJoinServer::TryBegin(GameParticipant& joiner, bool clientWantsSnap
 
 bool CSnapshotJoinServer::Begin(GameParticipant& joiner, const std::vector<int>& excluded, int retries)
 {
-	const std::vector<int> sourceNums = SelectSources(joiner, excluded);
+	const std::vector<int> sourceNums = SelectSources(joiner, excluded, retries > 0);
 
 	if (sourceNums.empty() || int(sourceNums.size()) < configHandler->GetInt("SnapshotJoinMinSources")) {
 		server->Message(spring::format("[SnapshotJoin] %d suitable source(s) for %s, catching up instead", int(sourceNums.size()), joiner.name.c_str()), false);
@@ -150,16 +162,12 @@ bool CSnapshotJoinServer::Begin(GameParticipant& joiner, const std::vector<int>&
 
 	Join join;
 	join.joinerNum = joiner.id;
-	join.requestID = nextRequestID++;
+	join.requestID = AllocRequestID();
 	join.providerNum = sourceNums.front();
 	join.retries = retries;
 	join.startTime = spring_gettime();
 	join.progressTime = join.startTime;
 	lastJoinTime[joiner.id] = join.startTime;
-
-	// never reuse the id of a running join
-	while (join.requestID == 0 || FindJoin(join.requestID) != nullptr)
-		join.requestID = nextRequestID++;
 
 	for (const int num: sourceNums) {
 		Source src;
@@ -193,6 +201,17 @@ bool CSnapshotJoinServer::Begin(GameParticipant& joiner, const std::vector<int>&
 }
 
 
+uint8_t CSnapshotJoinServer::AllocRequestID()
+{
+	uint8_t requestID = nextRequestID++;
+
+	// never reuse the id of a running join (Remove erases by id)
+	while (requestID == 0 || FindJoin(requestID) != nullptr)
+		requestID = nextRequestID++;
+
+	return requestID;
+}
+
 CSnapshotJoinServer::Join* CSnapshotJoinServer::FindJoin(uint8_t requestID)
 {
 	const auto it = std::find_if(joins.begin(), joins.end(), [&](const Join& j) { return (j.requestID == requestID); });
@@ -215,17 +234,26 @@ bool CSnapshotJoinServer::IsSource(int playerNum) const
 }
 
 
-bool CSnapshotJoinServer::IsParticipant(int playerNum) const
+bool CSnapshotJoinServer::AcceptsSnapshotPacket(int playerNum, uint8_t msgID) const
 {
 	for (const Join& j: joins) {
 		if (j.phase != Phase::SNAPSHOT && j.phase != Phase::ACK)
 			continue;
+
+		// the joiner only ever acknowledges (one small packet)
 		if (j.joinerNum == playerNum)
-			return true;
+			return (msgID == NETMSG_SNAPSHOT_HASH);
 
 		for (const Source& s: j.sources) {
-			if (s.playerNum == playerNum)
-				return true;
+			if (s.playerNum != playerNum)
+				continue;
+
+			// bulk data is expected from the provider while it uploads; a new
+			// connection in the slot of a provider that left is not the provider
+			if (msgID == NETMSG_SNAPSHOT_DATA)
+				return (s.role == SNAPSHOT_ROLE_PROVIDER && !j.providerLeft && j.phase == Phase::SNAPSHOT);
+
+			return true;
 		}
 	}
 
@@ -683,6 +711,8 @@ void CSnapshotJoinServer::Commit(Join& join)
 	joiner.clientLink->SendData(CBaseNetProtocol::Get().SendSetPlayerNum(uint8_t(join.joinerNum)));
 	joiner.clientLink->SendData(CBaseNetProtocol::Get().SendCurrentFrameProgress(server->serverFrameNum));
 	joiner.syncCheckStartFrame = join.markerFrame + 1;
+	// the frames from there on were (or are being) evaluated without it: compared as it reports them
+	joiner.lateSyncChecks = 0;
 
 	// the game stream from the marker on, then live packets; the history before it in the background
 	join.phase = Phase::CATCHUP;
@@ -709,7 +739,7 @@ void CSnapshotJoinServer::Restart(Join& join, const std::string& reason)
 	// no other sources: the classic catch-up (Abort needs a join to work on)
 	Join classic;
 	classic.joinerNum = joinerNum;
-	classic.requestID = nextRequestID++;
+	classic.requestID = AllocRequestID();
 	classic.startTime = spring_gettime();
 	classic.progressTime = classic.startTime;
 	joins.push_back(std::move(classic));
@@ -737,6 +767,7 @@ void CSnapshotJoinServer::Abort(Join& join, const std::string& reason)
 	joiner.clientLink->SendData(CBaseNetProtocol::Get().SendSetPlayerNum(uint8_t(join.joinerNum)));
 	joiner.clientLink->SendData(CBaseNetProtocol::Get().SendCurrentFrameProgress(server->serverFrameNum));
 	joiner.syncCheckStartFrame = 0;
+	joiner.lateSyncChecks = -1;
 
 	// the classic catch-up: the complete game stream, then live packets
 	join.phase = Phase::CATCHUP;

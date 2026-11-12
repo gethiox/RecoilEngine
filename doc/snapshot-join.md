@@ -22,7 +22,15 @@ into its demo, so its local replay is complete.
   preferred as sources since they do not influence the game speed; a joining
   spectator never stalls a player (it gets spectator sources only, so with
   fewer than `SnapshotJoinMinSources` spectators present it catches up
-  classically).
+  classically). Spectators admitted without a password (`AllowSpectatorJoin`,
+  the `~` names) are never sources: the agreement of independent clients is
+  what protects the joiner from a forged snapshot. A player chosen as
+  provider (no spectators available) sees its own packets delayed behind the
+  upload for its duration: by at most the queue limit below plus the chunks
+  in flight, i.e. tens of milliseconds on a LAN and up to a few hundred over
+  the internet (where the reliable UDP window of ~48 kB per round trip, not
+  `SnapshotTransferRate`, bounds the transfer: a 15 MB snapshot takes ~45 s
+  at 150 ms round-trip time).
 * **Never worse than before.** Every failure (no source, timeout,
   disconnect, digest mismatch, unsupported path finder, the joiner hosting a
   native AI, unit/weapon/feature defs edited by Lua during the game) falls
@@ -112,8 +120,13 @@ Details:
 * Snapshot transfers and the data sent to a joiner use `SnapshotTransferRate`
   instead of the regular per-link bandwidth limit.
 * The server does not expect sync responses from the joiner for frames covered
-  by its snapshot (`GameParticipant::syncCheckStartFrame`); from the next frame
-  on it is checked like every other client.
+  by its snapshot (`GameParticipant::syncCheckStartFrame`). The frames after
+  it are evaluated by the server long before the joiner reports them (it
+  receives and loads the snapshot first), so their agreed checksums are kept
+  (`CGameServer::lateSyncReference`) and compared with the joiner's responses
+  as they arrive: a state that diverges in the first frame after the snapshot
+  is reported as a sync error like any other, and the server logs how many
+  catch-up frames it verified once the joiner has caught up (or left).
 * On failure the joiner is told to catch up and the server sends it the
   complete game stream (also flow controlled) before releasing it.
 

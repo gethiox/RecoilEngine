@@ -72,8 +72,8 @@ public:
 	void PlayerLeft(int playerNum);
 
 	bool IsSource(int playerNum) const;
-	/// a source or the joiner of a join that is still transferring
-	bool IsParticipant(int playerNum) const;
+	/// whether a snapshot packet of this type from this client is part of a running join (exempt from the anti-spam limits)
+	bool AcceptsSnapshotPacket(int playerNum, uint8_t msgID) const;
 
 private:
 	using Digest = std::array<uint8_t, 32>;
@@ -124,7 +124,9 @@ private:
 		spring_time stallLogTime;
 	};
 
-	std::vector<int> SelectSources(const GameParticipant& joiner, const std::vector<int>& excluded) const;
+	std::vector<int> SelectSources(const GameParticipant& joiner, const std::vector<int>& excluded, bool retry) const;
+	/// an id no running join uses (never 0)
+	uint8_t AllocRequestID();
 	/// starts a join for a held-back joiner; false if there are no suitable sources
 	bool Begin(GameParticipant& joiner, const std::vector<int>& excluded, int retries);
 	/// the provider could not deliver: once, try again with other sources
