@@ -64,10 +64,13 @@ class CWaitCommandsAI {
 
 	private:
 		// Wait Base Class
+		// created on the issuing client only: unsynced objects (their own
+		// sync-id range, left out of the units' listener lists in snapshots)
 		class Wait : public CObject {
 			CR_DECLARE(Wait)
 			public:
 				virtual ~Wait();
+				bool IsSynced() const override { return false; }
 				virtual void DependentDied(CObject* o) = 0; // from CObject
 				virtual void AddUnit(CUnit* unit) = 0;
 				virtual void RemoveUnit(CUnit* unit) = 0;

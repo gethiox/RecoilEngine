@@ -376,7 +376,8 @@ float CWaitCommandsAI::Wait::GetFloatFromKey(KeyType k)
 
 
 CWaitCommandsAI::Wait::Wait(float _code)
-	: code(_code),
+	: CObject(false),
+	code(_code),
 	key(0),
 	valid(false),
 	deadTime(spring_gettime() + spring_secs(maxNetDelay))
