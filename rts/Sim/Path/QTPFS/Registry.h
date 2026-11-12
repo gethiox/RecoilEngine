@@ -34,8 +34,16 @@ struct entt::internal::entt_traits<QTPFS::entity> {
 };
 
 namespace QTPFS {
-    // Used to map external requests
+    // Used to map external requests (synced: every client makes the same ones,
+    // so entity ids and versions are identical everywhere and part of snapshots)
     extern entt::basic_registry<QTPFS::entity> externalRegistry;
+
+    // Unsynced requests (widgets, AI callbacks) differ per client: they get
+    // their own id space, so they cannot perturb the synced one. Their path
+    // ids carry this tag (above the 20 id and 3 version bits, still within a
+    // Lua float's mantissa).
+    extern entt::basic_registry<QTPFS::entity> unsyncedRegistry;
+    constexpr unsigned int UNSYNCED_PATH_ID_BIT = (1u << 23);
 
     // Internal to QTPFS
     extern entt::basic_registry<QTPFS::entity> registry;

@@ -12,6 +12,8 @@
 #include "Rendering/Env/Particles/ProjectileDrawer.h"
 #include "Rendering/Env/Particles/Classes/SmokeTrailProjectile.h"
 #include "Rendering/Models/3DModelPiece.hpp"
+#include "Rendering/Models/3DModel.hpp"
+#include "Rendering/Models/IModelParser.h"
 #include "Sim/Misc/GlobalSynced.h"
 #include "Sim/Misc/ModInfo.h"
 #include "Sim/Projectiles/ExplosionGenerator.h"
@@ -21,6 +23,8 @@
 #include "Sim/Units/UnitDef.h"
 #include "System/Matrix44f.h"
 #include "System/SpringMath.h"
+#include "System/creg/Serializer.h"
+#include "System/creg/RawSerialize.h"
 
 #include "System/Misc/TracyDefs.h"
 
@@ -28,21 +32,92 @@ static constexpr int   SMOKE_TIME   = 40;
 static constexpr int   SMOKE_SIZE   = 14;
 static constexpr float SMOKE_COLOR  = 0.5f;
 
+// smoke and fire trails are left out when this client's particles are
+// saturated: a local decision (config, unsynced particle count, unsynced RNG)
+// that must not end up in the synced flags
+static unsigned int LocalDrawFlags(unsigned int explFlags)
+{
+	const bool saturated = (projectileHandler.GetParticleSaturation() >= 0.95f);
+	return (explFlags & ~((PF_Smoke | PF_Fire) * int(saturated)));
+}
+
 CR_BIND_DERIVED(CPieceProjectile, CProjectile, )
 CR_REG_METADATA(CPieceProjectile,(
 	CR_SETFLAG(CF_Synced),
 
 	CR_MEMBER(age),
 	CR_MEMBER(explFlags),
+	CR_MEMBER_UNSYNCED(drawFlags), // see LocalDrawFlags
 	CR_IGNORED(omp),
 	CR_IGNORED(smokeTrail),
 	CR_IGNORED(fireTrailPoints),
 	CR_MEMBER(spinVec),
 	CR_MEMBER(spinSpeed),
 	CR_MEMBER(spinAngle),
-	CR_MEMBER(oldSmokePos),
-	CR_MEMBER(oldSmokeDir)
+	CR_MEMBER_UNSYNCED(oldSmokePos), // only advanced while the (unsynced) trail exists
+	CR_MEMBER_UNSYNCED(oldSmokeDir),
+
+	CR_SERIALIZER(Serialize),
+	CR_POSTLOAD(PostLoad)
 ))
+
+void CPieceProjectile::Serialize(creg::ISerializer* s)
+{
+	// the model and the piece are not creg objects: stored by name and index
+	creg::RawArchive ar(s);
+	std::string modelName = (model != nullptr) ? model->name : "";
+	int32_t pieceIndex = -1;
+
+	if (model != nullptr && omp != nullptr) {
+		for (size_t i = 0; i < model->pieceObjects.size(); i++) {
+			if (model->pieceObjects[i] == omp) {
+				pieceIndex = static_cast<int32_t>(i);
+				break;
+			}
+		}
+	}
+
+	ar.String(modelName);
+	ar.Value(pieceIndex);
+
+	if (ar.IsWriting())
+		return;
+
+	if (!modelName.empty())
+		model = modelLoader.LoadModel(modelName);
+
+	omp = (model != nullptr && pieceIndex >= 0 && size_t(pieceIndex) < model->pieceObjects.size()) ? model->GetPiece(pieceIndex) : nullptr;
+}
+
+void CPieceProjectile::PostLoad()
+{
+	if (creg::IsSkippingUnsyncedMembers()) {
+		// the trail starts afresh on a joining client
+		oldSmokePos = pos;
+		oldSmokeDir = dir;
+	}
+
+	// the trail effect is chosen with the unsynced RNG (see the constructor)
+	// and left out of snapshots: choose one again; without an owner the
+	// trail is simply not drawn (GenExplosion ignores an invalid id)
+	if (!creg::IsSkippingUnsyncedMembers())
+		return;
+
+	drawFlags = LocalDrawFlags(explFlags);
+
+	if ((explFlags & PF_NoCEGTrail) != 0)
+		return;
+
+	const CUnit* ownerUnit = owner();
+
+	if (ownerUnit == nullptr)
+		return;
+
+	const UnitDef* ud = ownerUnit->unitDef;
+
+	if (ud->GetPieceExpGenCount() > 0)
+		cegID = ud->GetPieceExpGenID(guRNG.NextInt(ud->GetPieceExpGenCount()));
+}
 
 CPieceProjectile::CPieceProjectile(
 	CUnit* owner,
@@ -81,6 +156,8 @@ CPieceProjectile::CPieceProjectile(
 		model = owner->model;
 		explFlags |= (PF_NoCEGTrail * (cegID == -1u));
 	}
+
+	drawFlags = LocalDrawFlags(explFlags);
 	{
 		// neither spinVector nor spinParams technically need to be
 		// synced, but since instances of this class are themselves
@@ -174,7 +251,7 @@ void CPieceProjectile::Collision(CUnit* unit, CFeature* feature)
 		helper->Explosion(params);
 	}
 
-	if (explFlags & PF_Smoke) {
+	if (drawFlags & PF_Smoke) {
 		if (explFlags & PF_NoCEGTrail) {
 			smokeTrail = projMemPool.alloc<CSmokeTrailProjectile>(
 				owner(),
@@ -241,7 +318,7 @@ void CPieceProjectile::Update()
 		return;
 	}
 
-	if (explFlags & PF_Fire) {
+	if (drawFlags & PF_Fire) {
 		for (int a = NUM_TRAIL_PARTS - 2; a >= 0; --a) {
 			fireTrailPoints[a + 1] = fireTrailPoints[a];
 		}
@@ -254,7 +331,13 @@ void CPieceProjectile::Update()
 		fireTrailPoints[0].size = 1 + guRNG.NextFloat();
 	}
 
-	if (explFlags & PF_Smoke) {
+	// synced: whether the piece is seen through air LOS, re-evaluated at the
+	// smoke period from synced data only (the trail that used to provide it
+	// exists on clients with particle budget left, with a local geometry)
+	if ((explFlags & PF_Smoke) && (age % NUM_TRAIL_PARTS) == 0)
+		useAirLos = ((pos.y - CGround::GetApproximateHeight(pos.x, pos.z)) > 10.0f);
+
+	if (drawFlags & PF_Smoke) {
 		if (smokeTrail) {
 			smokeTrail->UpdateEndPos(pos, dir);
 			oldSmokePos = pos;
@@ -274,8 +357,6 @@ void CPieceProjectile::Update()
 				SMOKE_COLOR,
 				projectileDrawer->smoketrailtex
 			);
-
-			useAirLos = smokeTrail->useAirLos;
 		}
 	}
 }
@@ -291,7 +372,7 @@ void CPieceProjectile::DrawOnMinimap() const
 void CPieceProjectile::Draw()
 {
 	RECOIL_DETAILED_TRACY_ZONE;
-	if ((explFlags & PF_Fire) == 0)
+	if ((drawFlags & PF_Fire) == 0)
 		return;
 
 	static constexpr SColor lightOrange(1.f, 0.78f, 0.59f, 0.2f);

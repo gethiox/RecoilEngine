@@ -20,6 +20,15 @@ public:
 	CObject();
 	virtual ~CObject();
 
+	/**
+	 * Whether this object is part of the synced simulation. Unsynced objects
+	 * (visual effects) get sync-ids from a separate range, so synced objects
+	 * get identical ids on every client, and are left out of game snapshots.
+	 */
+	virtual bool IsSynced() const { return true; }
+
+	void Serialize(creg::ISerializer* s);
+
 	/// Request to not inform this when obj dies
 	virtual void DeleteDeathDependence(CObject* obj, DependenceType dep);
 	/// Request to inform this when obj dies
@@ -68,15 +77,35 @@ public:
 
 	std::int64_t GetSyncID() const { return sync_id; }
 
+	/// last sync id handed out (saved games restore it, see RaiseCurrentSyncID)
+	static std::int64_t GetCurrentSyncID() { return cur_sync_id; }
+	/// ensure new objects get higher sync ids than every object of a loaded game
+	/// a loaded game continues with the saved counter (every loaded object was constructed meanwhile)
+	static void SetCurrentSyncID(std::int64_t id) { cur_sync_id = id; }
+	static void RaiseCurrentSyncID(std::int64_t id) {
+		std::int64_t cur = cur_sync_id;
+		while (cur < id && !cur_sync_id.compare_exchange_weak(cur, id)) {}
+	}
+
 private:
 	// Note, this has nothing to do with the UnitID, FeatureID, ...
 	// Its only purpose is to make the sorting in TSyncSafeSet syncsafe
 	std::int64_t sync_id;
 	static std::atomic<std::int64_t> cur_sync_id;
+	static std::atomic<std::int64_t> cur_unsynced_id;
+
+protected:
+	/// for derived classes that know whether they are synced at construction
+	explicit CObject(bool syncedObject);
+
+	/// unsynced objects sort after all synced ones
+	static constexpr std::int64_t UNSYNCED_ID_BASE = std::int64_t(1) << 62;
 
 public:
 	typedef std::vector<CObject*> TSyncSafeSet;
 	typedef std::vector<TSyncSafeSet> TDependenceMap;
+	/// maps dependence-type to index into a TDependenceMap
+	typedef spring::unordered_map<std::underlying_type_t<DependenceType>, size_t> TDependenceTable;
 	typedef std::function<bool(const CObject*, int*)> TObjFilterPred;
 
 	bool detached;
@@ -126,8 +155,8 @@ protected:
 	template<size_t N> void FilterListening(const TObjFilterPred& fp, std::array<int, N>& ids) const { FilterDepObjects(listening, fp, ids); }
 
 protected:
-	spring::unordered_map<std::underlying_type_t<DependenceType>, size_t> listenersDepTbl; // maps dependence-type to index into listeners
-	spring::unordered_map<std::underlying_type_t<DependenceType>, size_t> listeningDepTbl; // maps dependence-type to index into listening
+	TDependenceTable listenersDepTbl; // index into listeners
+	TDependenceTable listeningDepTbl; // index into listening
 
 	TDependenceMap listeners;
 	TDependenceMap listening;

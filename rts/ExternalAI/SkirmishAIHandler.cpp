@@ -12,6 +12,8 @@
 #include "Net/Protocol/NetProtocol.h"
 #include "System/Option.h"
 
+#include "System/creg/RawSerialize.h"
+#include "System/creg/Serializer.h"
 #include "System/creg/STL_Map.h"
 #include "System/creg/STL_Set.h"
 
@@ -21,8 +23,9 @@
 CR_BIND(CSkirmishAIHandler,)
 
 CR_REG_METADATA(CSkirmishAIHandler, (
-	CR_MEMBER(aiInstanceData),
-	CR_MEMBER(aiKillFlags),
+	CR_IGNORED(aiInstanceData), // see Serialize
+	CR_IGNORED(aiKillFlags), // see Serialize
+	CR_IGNORED(preLoadInstanceData),
 
 	CR_MEMBER_BEGINFLAG(CM_NoSerialize),
 		CR_IGNORED(localTeamAIs),
@@ -37,6 +40,7 @@ CR_REG_METADATA(CSkirmishAIHandler, (
 		CR_IGNORED(gameInitialized),
 	CR_MEMBER_ENDFLAG(CM_NoSerialize),
 
+	CR_SERIALIZER(Serialize),
 	CR_POSTLOAD(PostLoad)
 ))
 
@@ -46,10 +50,77 @@ CSkirmishAIHandler skirmishAIHandler;
 
 void CSkirmishAIHandler::SerializeSkirmishAIHandler(creg::ISerializer* s)
 {
-	if (!s->IsWriting())
+	if (!s->IsWriting()) {
+		skirmishAIHandler.preLoadInstanceData = skirmishAIHandler.aiInstanceData;
 		skirmishAIHandler.ResetState();
+	}
 
 	s->SerializeObjectInstance(&skirmishAIHandler, skirmishAIHandler.GetClass());
+}
+
+void CSkirmishAIHandler::Serialize(creg::ISerializer* s)
+{
+#ifdef USING_CREG
+	// a snapshot has to be identical on every client, so it only stores what
+	// every client knows about an AI: an AI created during the game has its
+	// real short name, version and options on its host only (the others
+	// store "n/a"), the kill flags and the statistics are the host's. A
+	// loading client keeps the host-side values it had for the same AI.
+	const bool snapshot = creg::IsSkippingUnsyncedMembers();
+	const size_t numSetupAIs = gameSetup->GetAIStartingDataCont().size();
+
+	creg::RawArchive ar(s);
+
+	for (size_t i = 0; i < aiInstanceData.size(); i++) {
+		SkirmishAIData& ai = aiInstanceData[i];
+
+		ar.String(ai.name);
+		ar.Value(ai.team);
+		ar.Value(ai.hostPlayer);
+		ar.Value(ai.status);
+
+		std::string shortName = (snapshot && i >= numSetupAIs && !ai.shortName.empty()) ? "n/a" : ai.shortName;
+		ar.String(shortName);
+
+		if (ar.IsReading())
+			ai.shortName = shortName;
+
+		if (!snapshot) {
+			std::vector<std::pair<std::string, std::string>> options(ai.options.begin(), ai.options.end());
+			std::sort(options.begin(), options.end());
+
+			ar.String(ai.version);
+			ar.Container(ai.optionKeys, [](creg::RawArchive& a, std::string& e) { a.String(e); });
+			ar.Container(options, [](creg::RawArchive& a, std::pair<std::string, std::string>& e) { a.String(e.first); a.String(e.second); });
+			ar.Value(ai.isLuaAI);
+			ar.Value(ai.currentStats.numCommands);
+			ar.Value(ai.currentStats.unitCommands);
+			ar.Value(ai.currentStats.cpuTime);
+			ar.Value(aiKillFlags[i]);
+
+			if (ar.IsReading()) {
+				ai.options.clear();
+
+				for (auto& e: options)
+					ai.options[e.first] = e.second;
+			}
+
+			continue;
+		}
+
+		if (!ar.IsReading())
+			continue;
+
+		const SkirmishAIData& local = preLoadInstanceData[i];
+
+		if (local.name == ai.name && local.team == ai.team && local.hostPlayer == ai.hostPlayer && local.shortName == ai.shortName) {
+			ai.version = local.version;
+			ai.optionKeys = local.optionKeys;
+			ai.options = local.options;
+			ai.isLuaAI = local.isLuaAI;
+		}
+	}
+#endif
 }
 
 void CSkirmishAIHandler::PostLoad()

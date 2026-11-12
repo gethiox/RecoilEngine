@@ -22,7 +22,10 @@ GameParticipant::~GameParticipant()
 
 void GameParticipant::SendData(std::shared_ptr<const netcode::RawPacket> packet)
 {
-	if (clientLink != nullptr && myState != GameParticipant::State::DISCONNECTING)
+	// a client waiting for its snapshot gets no game packets, but must learn of a shutdown
+	const bool heldBack = awaitingSnapshot && !(packet->length > 0 && packet->data[0] == NETMSG_QUIT);
+
+	if (clientLink != nullptr && myState != GameParticipant::State::DISCONNECTING && !heldBack)
 		clientLink->SendData(packet);
 }
 
@@ -36,6 +39,10 @@ void GameParticipant::Connected(std::shared_ptr<netcode::CConnection> _link, boo
 	isLocal = local;
 	myState = CONNECTED;
 	lastFrameResponse = 0;
+
+	// state of an earlier join from a snapshot
+	awaitingSnapshot = false;
+	syncCheckStartFrame = 0;
 }
 
 void GameParticipant::Kill(const std::string& reason, const bool flush)

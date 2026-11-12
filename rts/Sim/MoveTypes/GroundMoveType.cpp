@@ -150,8 +150,8 @@ CR_REG_METADATA(CGroundMoveType, (
 	// The ECS registry is not persisted across save/load, so a saved entity ID will collide with
 	// a newly-allocated entity in the fresh registry, causing FollowPath to destroy the wrong path
 	// or swap to an invalid one.
-	CR_IGNORED(nextPathId),
-	CR_IGNORED(deletePathId),
+	CR_MEMBER(nextPathId),
+	CR_MEMBER(deletePathId),
 
 	CR_MEMBER(numIdlingUpdates),
 	CR_MEMBER(numIdlingSlowUpdates),
@@ -560,6 +560,15 @@ void CGroundMoveType::PostLoad()
 {
 	RECOIL_DETAILED_TRACY_ZONE;
 	pathController = GMTDefaultPathController(owner);
+
+	// the path manager restored all paths, ids stay valid; the ECS components
+	// (see MoveTypes::serializeComponents) were restored as saved as well
+	if (pathManager->HasExactSerialization())
+		return;
+
+	// legacy: the path manager starts from scratch, saved path ids are stale
+	nextPathId = 0;
+	deletePathId = 0;
 
 	// If the active moveType is not set to default ground move (i.e. is on scripted move type) then skip.
 	if ((uint8_t *)owner->moveType != owner->amtMemBuffer) {

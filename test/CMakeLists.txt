@@ -554,6 +554,7 @@ endif()
 			"${ENGINE_SOURCE_DIR}/System/creg/Serializer.cpp"
 			"${ENGINE_SOURCE_DIR}/System/creg/VarTypes.cpp"
 			"${ENGINE_SOURCE_DIR}/System/creg/SerializeLuaState.cpp"
+			"${ENGINE_SOURCE_DIR}/System/creg/CanonicalLuaState.cpp"
 			"${ENGINE_SOURCE_DIR}/System/creg/creg.cpp"
 			${sources_engine_System_Threading}
 			${test_Common_sources}

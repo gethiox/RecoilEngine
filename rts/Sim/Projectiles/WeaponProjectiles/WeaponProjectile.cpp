@@ -21,6 +21,8 @@
 #include "System/Matrix44f.h"
 #include "System/SpringMath.h"
 #include "System/creg/DefTypes.h"
+#include "System/creg/RawSerialize.h"
+#include "System/creg/Serializer.h"
 
 #include "System/Misc/TracyDefs.h"
 
@@ -29,7 +31,7 @@ CR_BIND_DERIVED_INTERFACE(CWeaponProjectile, CProjectile)
 
 CR_REG_METADATA(CWeaponProjectile,(
 	CR_SETFLAG(CF_Synced),
-	CR_MEMBER(damages),
+	CR_IGNORED(damages), // see Serialize
 	CR_MEMBER(targeted),
 	CR_MEMBER(bounced),
 	CR_MEMBER(weaponDef),
@@ -42,8 +44,41 @@ CR_REG_METADATA(CWeaponProjectile,(
 	CR_MEMBER(bounces),
 	CR_MEMBER(weaponNum),
 
+	CR_SERIALIZER(Serialize),
 	CR_POSTLOAD(PostLoad)
 ))
+
+void CWeaponProjectile::Serialize(creg::ISerializer* s)
+{
+	DynDamageArray::SerializeRef(s, damages);
+	// set from the (synced) spawn parameters, the weapon definition or
+	// Spring.SetProjectileCEG, unlike the piece projectiles' random choice;
+	// the id is an index that depends on which generators this client loaded
+	// first (unsynced Lua can load some), so it is stored by name
+	creg::RawArchive ar(s);
+	uint8_t kind = 0; // 0: none, 1: a standard generator, 2: custom (by name)
+	std::string name;
+
+	if (ar.IsWriting() && cegID != CExplosionGeneratorHandler::EXPGEN_ID_INVALID) {
+		const char* n = explGenHandler.GetGeneratorName(cegID);
+		kind = (n != nullptr) ? 2 : 1;
+		name = (n != nullptr) ? n : "";
+	}
+
+	ar.Value(kind);
+
+	if (kind == 2)
+		ar.String(name);
+
+	if (ar.IsWriting())
+		return;
+
+	switch (kind) {
+		case 1: { cegID = CExplosionGeneratorHandler::EXPGEN_ID_STANDARD; } break;
+		case 2: { cegID = explGenHandler.LoadGeneratorID(name.c_str()); } break;
+		default: { cegID = CExplosionGeneratorHandler::EXPGEN_ID_INVALID; } break;
+	}
+}
 
 
 CWeaponProjectile::CWeaponProjectile(const ProjectileParams& params)
@@ -447,4 +482,16 @@ void CWeaponProjectile::PostLoad()
 	RECOIL_DETAILED_TRACY_ZONE;
 	assert(weaponDef != nullptr);
 	model = weaponDef->LoadModel();
+
+	// which textures this client's atlas has is local, as in the constructor
+	if (creg::IsSkippingUnsyncedMembers()) {
+		validTextures = {
+			false,
+			IsValidTexture(weaponDef->visuals.texture1),
+			IsValidTexture(weaponDef->visuals.texture2),
+			IsValidTexture(weaponDef->visuals.texture3),
+			IsValidTexture(weaponDef->visuals.texture4)
+		};
+		validTextures[0] = validTextures[1] || validTextures[2] || validTextures[3] || validTextures[4];
+	}
 }

@@ -43,6 +43,7 @@
 #include "System/FileSystem/FileSystem.h"
 #include "System/FileSystem/VFSHandler.h"
 #include "System/LoadSave/DemoRecorder.h"
+#include "Net/SnapshotJoinClient.h"
 #include "System/LoadSave/DemoReader.h"
 #include "System/LoadSave/LoadSaveHandler.h"
 #include "System/Log/ILog.h"
@@ -101,6 +102,9 @@ CPreGame::~CPreGame()
 	// delete leftover aGUI elements but not infoconsole, it is reused by CGame
 	agui::gui->Clean();
 	#endif
+
+	// a snapshot no game took (the normal case: CGame has it by now)
+	snapshotJoinClient.PreGameEnded();
 
 	pregame = nullptr;
 }
@@ -447,12 +451,23 @@ void CPreGame::UpdateClientNet()
 				);
 			} break;
 
+			case NETMSG_SNAPSHOT_DATA:
+			case NETMSG_SNAPSHOT_HASH: {
+				// joining a running game: a snapshot of it (or the server
+				// gave up on that), sent before our player number
+				snapshotJoinClient.HandlePreGamePacket(packet);
+			} break;
+
 			case NETMSG_SETPLAYERNUM: {
 				// this is sent after NETMSG_GAMEDATA, to let us know which
 				// player number we have (server assigns them based on order
 				// of connection)
 				if (!CGameSetup::ScriptLoaded())
 					throw content_error("No game data received from server");
+
+				// load the snapshot of the running game if we got one
+				if (saveFileHandler == nullptr)
+					saveFileHandler = snapshotJoinClient.TakeLoadHandler();
 
 				const uint8_t playerNum = packet->data[1];
 

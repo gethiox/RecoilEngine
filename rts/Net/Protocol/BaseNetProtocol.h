@@ -65,8 +65,13 @@ public:
 	PacketType SendLuaDrawTime(uint8_t playerNum, int32_t mSec);
 	PacketType SendDirectControl(uint8_t playerNum);
 	PacketType SendDirectControlUpdate(uint8_t playerNum, uint8_t status, int16_t heading, int16_t pitch);
-	PacketType SendAttemptConnect(const std::string& name, const std::string& passwd, const std::string& version, const std::string& platform, int32_t netloss, bool reconnect = false);
+	PacketType SendAttemptConnect(const std::string& name, const std::string& passwd, const std::string& version, const std::string& platform, int32_t netloss, bool reconnect = false, bool snapshotJoin = false);
 	PacketType SendRejectConnect(const std::string& reason);
+
+	PacketType SendSnapshotRequest(uint8_t requestID, uint8_t role, int32_t frameNum);
+	PacketType SendSnapshotData(uint8_t requestID, uint8_t playerNum, uint32_t offset, uint32_t totalSize, const uint8_t* data, uint32_t length);
+	PacketType SendSnapshotHash(uint8_t requestID, uint8_t playerNum, uint8_t status, int32_t frameNum, uint32_t compressedSize, uint32_t historySize, const uint8_t digest[32]);
+	PacketType SendSnapshotHistory(uint8_t requestID, uint32_t offset, uint32_t totalSize, const uint8_t* data, uint32_t length);
 	PacketType SendShare(uint8_t playerNum, uint8_t shareTeam, uint8_t bShareUnits, float shareMetal, float shareEnergy);
 	PacketType SendSetShare(uint8_t playerNum, uint8_t myTeam, float metalShareFraction, float energyShareFraction);
 	PacketType SendGameOver(uint8_t playerNum, const std::vector<uint8_t>& winningAllyTeams);

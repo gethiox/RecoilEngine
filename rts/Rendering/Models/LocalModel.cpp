@@ -64,8 +64,17 @@ void LocalModel::SetModel(const S3DModel* model, bool initialize)
 			pieces[n].original = omp;
 		}
 
+		// the bounding volume and its pending-recalculation flag are
+		// restored as saved: recalculating here would differ from the
+		// running game whenever a recalculation is still pending there
+		// (the volume is used by collision handling)
+		const auto savedBoundingVolume = boundingVolume;
+		const bool savedNeedsBoundariesRecalc = needsBoundariesRecalc;
+
 		pieces[0].UpdateChildTransformRec(true);
-		UpdateBoundingVolume();
+
+		boundingVolume = savedBoundingVolume;
+		needsBoundariesRecalc = savedNeedsBoundariesRecalc;
 		return;
 	}
 

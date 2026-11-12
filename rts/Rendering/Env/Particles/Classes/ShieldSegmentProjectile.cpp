@@ -23,7 +23,7 @@ CR_REG_METADATA(ShieldSegmentCollection, (
 	CR_IGNORED(shieldTexture),
 	CR_IGNORED(lastAllowDrawFrame),
 	CR_IGNORED(allowDrawing),
-	CR_MEMBER(shieldSegments),
+	CR_MEMBER_UNSYNCED(shieldSegments), // unsynced (visual) projectiles
 	CR_MEMBER(color),
 	CR_MEMBER(size),
 
@@ -130,6 +130,22 @@ void ShieldSegmentCollection::PostLoad()
 
 	if ((allowDrawing = wd->IsVisibleShield())) {
 		shieldTexture = wd->visuals.texture1;
+
+		// snapshots leave the (unsynced) segments out: create them like Init does
+		if (shieldSegments.empty()) {
+			const CUnit* u = shield->owner;
+
+			for (int y = 0; y < NUM_SEGMENTS_Y; ++y) {
+				for (int x = 0; x < NUM_SEGMENTS_X; ++x) {
+					shieldSegments.push_back(projMemPool.alloc<ShieldSegmentProjectile>(this, wd, u->pos, x, y));
+				}
+			}
+
+			if (UsingPerlinNoise())
+				projectileDrawer->IncPerlinTexObjectCount();
+
+			return;
+		}
 
 		int i = 0;
 		for (int y = 0; y < NUM_SEGMENTS_Y; ++y) {

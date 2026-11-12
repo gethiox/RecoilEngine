@@ -4,12 +4,15 @@
 #define FPS_UNIT_CONTROLLER_H
 
 #include "System/float3.h"
+#include "System/creg/creg_cond.h"
 
 class CUnit;
 class CPlayer;
 
 
 struct FPSUnitController {
+	CR_DECLARE_STRUCT(FPSUnitController)
+
 	FPSUnitController();
 
 	void SetControlleeUnit(CUnit* controlleeUnit) { controllee = controlleeUnit; }

@@ -27,6 +27,13 @@ using namespace asio;
 static constexpr unsigned udpMaxPacketSize = 4096;
 static constexpr int maxChunkSize = 254;
 static constexpr int chunksPerSec = 30;
+// a receiver can only request resends (naks) of chunks up to 255 chunks after
+// its last in-order chunk; new packets are not split into chunks while this
+// many are unacknowledged (a packet that was started is always completed)
+static constexpr size_t maxChunksInFlight = 192;
+// acknowledge this many received chunks without waiting for other data to send,
+// so the sender of a bulk transfer does not wait for its window to open
+static constexpr int ackChunksThreshold = maxChunksInFlight / 4;
 
 
 
@@ -277,6 +284,7 @@ void UDPConnection::Init()
 	#endif
 
 	lastInOrder = -1;
+	lastAckSent = -1;
 	waitingPackets.clear();
 	waitingPackets.reserve(256);
 	incomingChunkNums.clear();
@@ -700,8 +708,8 @@ void UDPConnection::Flush(const bool forced)
 
 	const spring_time curTime = spring_gettime();
 
-	// do not create chunks more than chunksPerSec times per second
-	const bool waitMore = (lastChunkCreatedTime >= (curTime - spring_msecs(1000 / chunksPerSec)));
+	// do not create chunks more than chunksPerSec times per second (except for bulk transfers)
+	const bool waitMore = !hasOutgoingLimitOverride && (lastChunkCreatedTime >= (curTime - spring_msecs(1000 / chunksPerSec)));
 	// if the packet is tiny, reduce the send frequency further
 	const int requiredLength = ((200 >> netLossFactor) - spring_tomsecs(curTime - lastChunkCreatedTime)) / 10;
 
@@ -724,8 +732,10 @@ void UDPConnection::Flush(const bool forced)
 		bool sendMore = true;
 
 		do {
-			sendMore  = (outgoing.GetAverage(true) <= globalConfig.linkOutgoingBandwidth);
-			sendMore |= ((globalConfig.linkOutgoingBandwidth <= 0) || partialPacket || forced);
+			sendMore  = (outgoing.GetAverage(true) <= GetOutgoingLimit());
+			sendMore |= ((GetOutgoingLimit() <= 0) || partialPacket || forced);
+			// a forced flush (connection closing) sends everything; a lost chunk beyond the window is lost for good then
+			sendMore &= (partialPacket || forced || (unackedChunks.size() + newChunks.size()) < maxChunksInFlight);
 
 			if (!outgoingData.empty() && sendMore) {
 				std::shared_ptr<const RawPacket>& packet = *(outgoingData.begin());
@@ -906,8 +916,9 @@ void UDPConnection::SendIfNecessary(bool flushed)
 	const bool flushSend = (flushed || !newChunks.empty());
 	const bool otherSend = (UseMinLossFactor() && !resendRequested.empty());
 	const bool unackSend = (nak > 0) || (difTime > (unackTime * 0.5f));
+	const bool ackSend = ((lastInOrder - lastAckSent) >= ackChunksThreshold);
 
-	if (!flushSend && !otherSend && !unackSend)
+	if (!flushSend && !otherSend && !unackSend && !ackSend)
 		return;
 
 	int maxResend = resendRequested.size();
@@ -952,7 +963,7 @@ void UDPConnection::SendIfNecessary(bool flushed)
 	}
 
 
-	while (((outgoing.GetAverage() <= globalConfig.linkOutgoingBandwidth) || (globalConfig.linkOutgoingBandwidth <= 0))) {
+	while (((outgoing.GetAverage() <= GetOutgoingLimit()) || (GetOutgoingLimit() <= 0))) {
 		Packet buf(lastInOrder, nak);
 
 		if (nak > 0) {
@@ -1052,6 +1063,7 @@ void UDPConnection::SendPacket(Packet& pkt)
 
 	outgoing.DataSent(sendBuffer.size());
 	lastPacketSendTime = spring_gettime();
+	lastAckSent = pkt.lastContinuous;
 
 	ip::udp::socket::message_flags flags = 0;
 	asio::error_code err;
@@ -1099,6 +1111,25 @@ void UDPConnection::RequestResend(ChunkPtr ptr, bool noSort)
 }
 
 
+
+int UDPConnection::GetOutgoingLimit() const
+{
+	return hasOutgoingLimitOverride ? outgoingLimitOverride : globalConfig.linkOutgoingBandwidth;
+}
+
+size_t UDPConnection::GetOutgoingQueueBytes() const
+{
+	size_t bytes = 0;
+
+	for (const auto& packet: outgoingData)
+		bytes += packet->length;
+	for (const auto& chunk: newChunks)
+		bytes += chunk->data.size();
+	for (const auto& chunk: unackedChunks)
+		bytes += chunk->data.size();
+
+	return bytes;
+}
 
 void UDPConnection::BandwidthUsage::UpdateTime(unsigned newTime)
 {

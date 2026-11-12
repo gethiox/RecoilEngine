@@ -85,6 +85,13 @@ public:
 	}
 
 	val_type state() const { return val; }
+	val_type stream() const { return seq; }
+
+	/// restores a generator previously captured via state() and stream()
+	void restore(const val_type _val, const val_type _seq) {
+		val = _val;
+		seq = _seq;
+	}
 
 public:
 	static constexpr res_type min_res = std::numeric_limits<res_type>::min();
@@ -131,6 +138,21 @@ public:
 	rng_val_type GetInitSeed() const { AssureSyncedness(); return initSeed; }
 	rng_val_type GetLastSeed() const { AssureSyncedness(); return lastSeed; }
 	rng_val_type GetGenState() const { AssureSyncedness(); return (gen.state()); }
+
+	/// complete generator state, everything needed to continue the exact same sequence
+	struct FullState {
+		rng_val_type genState = 0;
+		rng_val_type genStream = 0;
+		rng_val_type initSeed = 0;
+		rng_val_type lastSeed = 0;
+	};
+
+	FullState GetFullState() const { return {gen.state(), gen.stream(), initSeed, lastSeed}; }
+	void SetFullState(const FullState& fs) {
+		gen.restore(fs.genState, fs.genStream);
+		initSeed = fs.initSeed;
+		lastSeed = fs.lastSeed;
+	}
 
 	// needed for std::{random_}shuffle
 	rng_res_type operator()(              ) { AssureSyncedness(); return (this->*gnext )( ); }

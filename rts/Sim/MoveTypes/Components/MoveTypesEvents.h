@@ -73,19 +73,21 @@ struct UnitMovedEvent {
 };
 
 struct ChangeHeadingEvent {
-    int unitId;
+    int unitId = -1;
     short deltaHeading = 0;
     bool changed = false;
 
+    ChangeHeadingEvent() = default;
     ChangeHeadingEvent(int _unitId)
     : unitId(_unitId)
     {}
 };
 
 struct ChangeMainHeadingEvent {
-    int unitId;
+    int unitId = -1;
     bool changed = false;
 
+    ChangeMainHeadingEvent() = default;
     ChangeMainHeadingEvent(int _unitId)
     : unitId(_unitId)
     {}

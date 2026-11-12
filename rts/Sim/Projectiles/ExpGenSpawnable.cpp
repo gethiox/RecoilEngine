@@ -29,10 +29,10 @@ CR_REG_METADATA(CExpGenSpawnable, (
 	CR_MEMBER(rotVal),
 	CR_MEMBER(rotVel),
 	CR_MEMBER(createFrame),
-	CR_MEMBER(animProgress1),
-	CR_MEMBER(animProgress2),
-	CR_MEMBER(animProgress3),
-	CR_MEMBER(animProgress4),
+	CR_MEMBER_UNSYNCED(animProgress1), // written by Draw
+	CR_MEMBER_UNSYNCED(animProgress2), // written by Draw
+	CR_MEMBER_UNSYNCED(animProgress3), // written by Draw
+	CR_MEMBER_UNSYNCED(animProgress4), // written by Draw
 	CR_MEMBER_BEGINFLAG(CM_Config),
 		CR_MEMBER(rotParams),
 		CR_FAKE(animParams),
@@ -45,8 +45,8 @@ CR_REG_METADATA(CExpGenSpawnable, (
 
 decltype(CExpGenSpawnable::spawnables) CExpGenSpawnable::spawnables = {};
 
-CExpGenSpawnable::CExpGenSpawnable(const float3& pos, const float3& spd)
-	: CWorldObject(pos, spd)
+CExpGenSpawnable::CExpGenSpawnable(const float3& pos, const float3& spd, bool syncedObject)
+	: CWorldObject(pos, spd, syncedObject)
 	, rotVal{ 0 }
 	, rotVel{ 0 }
 	, createFrame{ 0 }
@@ -55,8 +55,9 @@ CExpGenSpawnable::CExpGenSpawnable(const float3& pos, const float3& spd)
 	assert(projMemPool.alloced(this));
 }
 
+// default-constructed spawnables are created by explosion generators: visual only
 CExpGenSpawnable::CExpGenSpawnable()
-	: CWorldObject()
+	: CWorldObject(false)
 	, rotVal{ 0 }
 	, rotVel{ 0 }
 	, createFrame{ 0 }

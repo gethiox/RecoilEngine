@@ -18,6 +18,7 @@
 #include <variant>
 #include <type_traits>
 
+namespace creg { class ISerializer; }
 class CGameHelper;
 
 class CUnit;
@@ -249,6 +250,9 @@ public:
 
 	void DamageObjectsInExplosionRadius(const CExplosionParams& params, const float expRad, const int weaponDefID);
 	void Explosion(const CExplosionParams& params);
+
+	/// the deferred explosion damage (synced state, part of saved games)
+	void Serialize(creg::ISerializer* s);
 
 private:
 	struct WaitingDamage {

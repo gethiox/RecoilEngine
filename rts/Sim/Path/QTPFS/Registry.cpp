@@ -1,6 +1,7 @@
 #include "Registry.h"
 
 entt::basic_registry<QTPFS::entity> QTPFS::externalRegistry;
+entt::basic_registry<QTPFS::entity> QTPFS::unsyncedRegistry;
 
 entt::basic_registry<QTPFS::entity> QTPFS::registry;
 SystemGlobals::SystemGlobal<decltype(QTPFS::registry)> QTPFS::systemGlobals(QTPFS::registry);

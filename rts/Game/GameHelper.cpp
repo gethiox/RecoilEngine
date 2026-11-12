@@ -1,6 +1,8 @@
 /* This file is part of the Spring engine (GPL v2 or later), see LICENSE.html */
 
 #include "GameHelper.h"
+#include "System/creg/RawSerialize.h"
+#include "System/Exceptions.h"
 
 #include "Camera.h"
 #include "GameSetup.h"
@@ -58,6 +60,51 @@ void CGameHelper::Init()
 
 void CGameHelper::Kill()
 {
+}
+
+void CGameHelper::Serialize(creg::ISerializer* s)
+{
+	creg::RawArchive ar(s);
+
+	for (auto& wdVec: waitingDamages) {
+		uint32_t count = wdVec.size();
+		ar.Value(count);
+
+		if (ar.IsReading()) {
+			wdVec.clear();
+			wdVec.reserve(count);
+		}
+
+		for (uint32_t i = 0; i < count; i++) {
+			if (ar.IsReading())
+				wdVec.emplace_back(DamageArray(), ZeroVector, -1, -1, -1, -1);
+
+			WaitingDamage& wd = wdVec[i];
+			ar.Value(wd.attackerID);
+			ar.Value(wd.targetID);
+			ar.Value(wd.weaponID);
+			ar.Value(wd.projectileID);
+			ar.Value(wd.impulse);
+			ar.Value(wd.damage.paralyzeDamageTime);
+			ar.Value(wd.damage.impulseFactor);
+			ar.Value(wd.damage.impulseBoost);
+			ar.Value(wd.damage.craterMult);
+			ar.Value(wd.damage.craterBoost);
+
+			// sized by the damage type count of the game on construction
+			uint32_t numTypes = wd.damage.GetNumTypes();
+			ar.Value(numTypes);
+
+			if (ar.IsReading() && numTypes != uint32_t(wd.damage.GetNumTypes()))
+				throw content_error("[CGameHelper::Serialize] damage type count mismatch");
+
+			for (uint32_t t = 0; t < numTypes; t++) {
+				float d = wd.damage.Get(t);
+				ar.Value(d);
+				wd.damage.Set(t, d);
+			}
+		}
+	}
 }
 
 void CGameHelper::Update()

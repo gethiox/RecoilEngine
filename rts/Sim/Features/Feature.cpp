@@ -28,6 +28,7 @@
 #include "System/EventHandler.h"
 #include "System/SpringMath.h"
 #include "System/creg/DefTypes.h"
+#include "System/creg/Serializer.h"
 #include "System/Log/ILog.h"
 
 #include "System/Misc/TracyDefs.h"
@@ -39,9 +40,9 @@ CR_REG_METADATA(CFeature, (
 	CR_MEMBER(isRepairingBeforeResurrect),
 	CR_MEMBER(inUpdateQue),
 	CR_MEMBER(deleteMe),
-	CR_MEMBER(alphaFade),
+	CR_MEMBER_UNSYNCED(alphaFade),
 
-	CR_MEMBER(drawAlpha),
+	CR_MEMBER_UNSYNCED(drawAlpha),
 	CR_MEMBER(resurrectProgress),
 	CR_MEMBER(reclaimTime),
 	CR_MEMBER(reclaimLeft),
@@ -58,10 +59,28 @@ CR_REG_METADATA(CFeature, (
 	CR_MEMBER(moveCtrl),
 
 	CR_MEMBER(solidOnTop),
-	CR_MEMBER(transMatrix),
+	CR_IGNORED(transMatrix), // see Serialize
 
+	// set by synced Lua (Spring.SetFeatureNoSelect) and read back by it, unlike for units
+	CR_MEMBER(noSelect),
+
+	CR_SERIALIZER(Serialize),
 	CR_POSTLOAD(PostLoad)
 ))
+
+void CFeature::Serialize(creg::ISerializer* s)
+{
+	// [1] is the synced transform, [0] the one the renderer interpolates
+	s->Serialize(&transMatrix[1], sizeof(transMatrix[1]));
+
+	if (!creg::IsSkippingUnsyncedMembers()) {
+		s->Serialize(&transMatrix[0], sizeof(transMatrix[0]));
+		return;
+	}
+
+	if (!s->IsWriting())
+		transMatrix[0] = transMatrix[1];
+}
 
 CR_BIND(CFeature::MoveCtrl,)
 
@@ -104,6 +123,12 @@ CFeature::~CFeature()
 void CFeature::PostLoad()
 {
 	RECOIL_DETAILED_TRACY_ZONE;
+	// snapshots leave out the (unsynced) selection volume; same as in Initialize
+	if (creg::IsSkippingUnsyncedMembers()) {
+		selectionVolume = def->selectionVolume;
+		selectionVolume.InitDefault(float4(radius, height,  xsize * SQUARE_SIZE, zsize * SQUARE_SIZE));
+	}
+
 	eventHandler.RenderFeaturePreCreated(this);
 	eventHandler.RenderFeatureCreated(this);
 }

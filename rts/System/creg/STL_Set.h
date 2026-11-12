@@ -6,7 +6,12 @@
 #include "creg_cond.h"
 #include "System/UnorderedSet.hpp"
 
+#include <algorithm>
+#include <cstdint>
 #include <set>
+#include <stdexcept>
+#include <type_traits>
+#include <vector>
 
 #ifdef USING_CREG
 
@@ -46,6 +51,67 @@ namespace creg
 	};
 
 
+	/// hash set keeping its exact internal layout, see ExactLayoutHashMapType
+	template<typename T>
+	class ExactLayoutHashSetType : public IType
+	{
+	public:
+		ExactLayoutHashSetType() : IType(sizeof(T)) { }
+
+		void Serialize(ISerializer* s, void* instance)
+		{
+			T& ct = *(T*)instance;
+
+			uint64_t numBuckets = ct.layout_bucket_count();
+			int32_t maxProbeLength = ct.layout_max_probe_length();
+			s->SerializeInt(&numBuckets, sizeof(numBuckets));
+			s->SerializeInt(&maxProbeLength, sizeof(maxProbeLength));
+
+			// the stream may come from another client: a few hundred million
+			// buckets is far beyond any map of the game
+			if (numBuckets > (uint64_t(1) << 28) || (numBuckets & (numBuckets - 1)) != 0)
+				throw std::runtime_error("[creg::ExactLayoutHashSetType] invalid bucket count");
+			// -1: no probe happened yet (an empty or never-collided map)
+			if (!s->IsWriting() && (maxProbeLength < -1 || uint64_t(std::max(maxProbeLength, 0)) > numBuckets))
+				throw std::runtime_error("[creg::ExactLayoutHashSetType] invalid probe length");
+
+			std::vector<uint8_t> states(numBuckets);
+
+			if (s->IsWriting()) {
+				for (size_t b = 0; b < numBuckets; b++)
+					states[b] = ct.layout_state(b);
+			}
+
+			s->Serialize(states.data(), static_cast<int>(numBuckets));
+
+			if (!s->IsWriting()) {
+				for (size_t b = 0; b < numBuckets; b++) {
+					if (states[b] > T::LAYOUT_STATE_FILLED)
+						throw std::runtime_error("[creg::ExactLayoutHashSetType] invalid bucket state");
+				}
+			}
+
+			if (s->IsWriting()) {
+				for (const auto& v: ct)
+					DeduceType<typename T::value_type>::Get()->Serialize(s, (void*) &v);
+				return;
+			}
+
+			ct.layout_restore(numBuckets, maxProbeLength, states);
+
+			for (size_t b = 0; b < numBuckets; b++) {
+				if (states[b] != T::LAYOUT_STATE_FILLED)
+					continue;
+
+				typename T::value_type v{};
+				DeduceType<typename T::value_type>::Get()->Serialize(s, &v);
+				ct.layout_fill(b, std::move(v));
+			}
+		}
+
+		std::string GetName() const { return "hashset<" + DeduceType<typename T::value_type>::Get()->GetName() + ">"; }
+	};
+
 	// Set type
 	template<typename T, typename C>
 	struct DeduceType<std::set<T, C> > {
@@ -63,8 +129,14 @@ namespace creg
 	// Hash set
 	template<typename T>
 	struct DeduceType<spring::unordered_set<T> > {
+		using SetT = spring::unordered_set<T>;
+
 		static std::unique_ptr<IType> Get() {
-			return std::unique_ptr<IType>(new SetType<spring::unordered_set<T> >());
+			// values hashed by address cannot keep their layout across processes
+			if constexpr (!std::is_pointer_v<T> && requires (SetT& c) { c.layout_bucket_count(); })
+				return std::unique_ptr<IType>(new ExactLayoutHashSetType<SetT>());
+			else
+				return std::unique_ptr<IType>(new SetType<SetT>());
 		}
 	};
 	// Unsynced Hash set

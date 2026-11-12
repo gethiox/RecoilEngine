@@ -124,6 +124,10 @@ class CSyncedLuaHandle : public CLuaHandle
 
 		bool SyncedActionFallback(const std::string& line, int playerID) override;
 
+		// saved games
+		const spring::unordered_map<std::string, std::string>& GetTextCommands() const { return textCommands; }
+		void SetTextCommands(const spring::unordered_map<std::string, std::string>& cmds) { textCommands = cmds; }
+
 	protected:
 		CSyncedLuaHandle(CSplitLuaHandle* base, const std::string& name, int order);
 		virtual ~CSyncedLuaHandle();

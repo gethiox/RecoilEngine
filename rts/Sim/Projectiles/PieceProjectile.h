@@ -35,6 +35,8 @@ public:
 	);
 
 	void Update() override;
+	void Serialize(creg::ISerializer* s);
+	void PostLoad();
 	void Draw() override;
 	void DrawOnMinimap() const override;
 	void Collision() override;
@@ -59,6 +61,8 @@ public:
 	int age;
 
 	unsigned int explFlags;
+	/// explFlags without the smoke/fire bits this client does not draw (particle saturation); unsynced
+	unsigned int drawFlags = 0;
 
 	const S3DModelPiece* omp;
 

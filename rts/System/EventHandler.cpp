@@ -568,10 +568,25 @@ void CEventHandler::GameProgress(int gameFrame)
 	ITERATE_EVENTCLIENTLIST(GameProgress, gameFrame);
 }
 
-void CEventHandler::GameID(const unsigned char* gameID, unsigned int numBytes)
+void CEventHandler::GameID(const unsigned char* gameID, unsigned int numBytes, bool unsyncedOnly)
 {
 	ZoneScoped;
-	ITERATE_EVENTCLIENTLIST(GameID, gameID, numBytes);
+	if (!unsyncedOnly) {
+		ITERATE_EVENTCLIENTLIST(GameID, gameID, numBytes);
+		return;
+	}
+
+	// a game loaded from a saved state: synced handlers reacted to the id when
+	// the game started (e.g. by reseeding the synced RNG), which the loaded
+	// state contains; only the (freshly started) unsynced handlers get it
+	for (size_t i = 0; i < listGameID.size(); ) {
+		CEventClient* ec = listGameID[i];
+
+		if (!ec->GetSynced())
+			ec->GameID(gameID, numBytes);
+
+		i += (i < listGameID.size() && ec == listGameID[i]);
+	}
 }
 
 

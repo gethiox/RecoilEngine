@@ -54,14 +54,19 @@
 
 bool LuaConstEngine::PushEntries(lua_State* L)
 {
+	// a synced state is the same on every client: nothing in it may depend on
+	// the build flavour (headless, debug) or on this client's settings. The
+	// sync version is what the clients have in common.
+	const bool synced = CLuaHandle::GetHandleSynced(L);
+
 	LuaPushNamedString(L, "version"        , SpringVersion::GetSync()      );
-	LuaPushNamedString(L, "versionFull"    , SpringVersion::GetFull()      );
+	LuaPushNamedString(L, "versionFull"    , synced ? SpringVersion::GetSync() : SpringVersion::GetFull());
 	LuaPushNamedString(L, "versionMajor"   , SpringVersion::GetMajor()     );
 	LuaPushNamedString(L, "versionMinor"   , SpringVersion::GetMinor()     );
 	LuaPushNamedString(L, "versionPatchSet", SpringVersion::GetPatchSet()  );
 	LuaPushNamedString(L, "commitsNumber"  , SpringVersion::GetCommits()   );
-	LuaPushNamedString(L, "buildFlags"     , SpringVersion::GetAdditional());
-	LuaPushNamedNumber(L, "wordSize", (!CLuaHandle::GetHandleSynced(L))? Platform::NativeWordSize() * 8: 0);
+	LuaPushNamedString(L, "buildFlags"     , synced ? std::string() : SpringVersion::GetAdditional());
+	LuaPushNamedNumber(L, "wordSize", (!synced)? Platform::NativeWordSize() * 8: 0);
 
 	LuaPushNamedNumber(L, "gameSpeed", GAME_SPEED);
 	LuaPushNamedNumber(L, "maxCustomPaletteID", MAX_CUSTOM_COLORS - 1);
@@ -101,6 +106,11 @@ bool LuaConstEngine::PushEntries(lua_State* L)
 #else
 	bool newIndicators = true;
 #endif
+	// synced states get the engine's default codes (every client's synced
+	// state has to be identical; this is a per-client setting)
+	if (synced)
+		newIndicators = false;
+
 	lua_createtable(L, 0, 3);
 		LuaPushNamedChar(L, "Color"          , static_cast<char>(newIndicators ? CglFont::ColorCodeIndicator : CglFont::OldColorCodeIndicator)  );
 		LuaPushNamedChar(L, "ColorAndOutline", static_cast<char>(newIndicators ? CglFont::ColorCodeIndicatorEx : CglFont::OldColorCodeIndicatorEx));

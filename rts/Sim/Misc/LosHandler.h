@@ -14,6 +14,7 @@
 #include "System/Rectangle.h"
 #include "System/EventClient.h"
 #include "System/UnorderedMap.hpp"
+#include "System/creg/ISerializer.h"
 
 
 /**
@@ -126,6 +127,9 @@ public:
 
 	void Init(const int mipLevel, LosType type);
 	void Kill();
+
+	/// exact (de)serialization of all instances, queues and LOS maps
+	void Serialize(creg::ISerializer* s);
 
 public:
 	void Update();
@@ -303,6 +307,9 @@ public:
 	void Update() override;
 	void UpdateHeightMapSynced(SRectangle rect);
 
+	void Serialize(creg::ISerializer* s);
+	void PostLoad();
+
 public:
 	ILosType los;
 	ILosType airLos;
@@ -329,6 +336,9 @@ private:
 
 	std::vector<float> radarErrorSizes;
 	std::array<ILosType*, 7> losTypes;
+
+	/// unit -> LOS instance ids read by Serialize, applied by PostLoad
+	std::vector<std::pair<int, std::array<int, 7>>> loadedUnitInstances;
 };
 
 

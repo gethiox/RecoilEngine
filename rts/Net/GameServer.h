@@ -62,9 +62,12 @@ private:
  * checking and forwarding gamedata to the clients. It keeps track of the sync,
  * cpu and other stats and informs all clients about events.
  */
+class CSnapshotJoinServer;
+
 class CGameServer
 {
 	friend class CCregLoadSaveHandler; // For initializing server state after load
+	friend class CSnapshotJoinServer;
 public:
 	CGameServer(
 		const std::shared_ptr<const ClientSetup> newClientSetup,
@@ -142,7 +145,8 @@ private:
 	void MutePlayer(int playerNum, bool muteChat, bool muteDraw);
 	void ResignPlayer(int playerNum);
 
-	bool CheckPlayerPassword(const int playerNum, const std::string& pw) const;
+	/// requirePassword: only true if the player has a (non-empty) password and pw matches it
+	bool CheckPlayerPassword(const int playerNum, const std::string& pw, bool requirePassword = false) const;
 
 	unsigned BindConnection(
 		std::shared_ptr<netcode::CConnection> clientLink,
@@ -152,7 +156,8 @@ private:
 		const std::string& clientPlatform,
 		bool isLocal,
 		bool reconnect = false,
-		int netloss = 0
+		int netloss = 0,
+		bool snapshotJoin = false
 	);
 
 	void CheckForGameStart(bool forced = false);
@@ -161,6 +166,14 @@ private:
 	void Update();
 	void ProcessPacket(const unsigned playerNum, std::shared_ptr<const netcode::RawPacket> packet);
 	void CheckSync();
+	/// a client waits for or catches up from a snapshot (its frames are checked late)
+	bool AnyoneCatchingUp() const;
+	/// a client that was catching up from a snapshot reached the live frames or left: report, stop
+	void EndLateSync(GameParticipant& p, const char* how);
+#ifdef SYNCCHECK
+	/// a client catching up from a snapshot answered an evaluated frame with another checksum
+	void LateSyncError(GameParticipant& p, int frameNum, unsigned checkSum, unsigned correctChecksum);
+#endif
 	void HandleConnectionAttempts();
 	bool ValidateAICommandTeam(uint8_t aiID, int cmdID, const netcode::RawPacket& packet, const GameParticipant& player);
 	void ServerReadNet();
@@ -230,6 +243,9 @@ private:
 	/////////////////// sync stuff ///////////////////
 #ifdef SYNCCHECK
 	std::set<int> outstandingSyncFrames;
+	/// agreed checksums of evaluated frames, kept while a client that joined
+	/// from a snapshot still has to simulate them (frame -> checksum)
+	std::map<int, unsigned> lateSyncReference;
 #endif
 
 	/////////////////// game status variables ///////////////////
@@ -291,6 +307,7 @@ private:
 
 	std::unique_ptr<netcode::UDPListener> udpListener;
 	std::unique_ptr<CDemoReader> demoReader;
+	std::unique_ptr<CSnapshotJoinServer> snapshotJoin;
 	std::unique_ptr<CDemoRecorder> demoRecorder;
 	std::unique_ptr<AutohostInterface> hostif;
 
@@ -300,6 +317,8 @@ private:
 	mutable spring::recursive_mutex gameServerMutex;
 
 	std::atomic<bool> gameHasStarted{false};
+	/// a client reported the game over (the client-side effects of that are not part of a snapshot)
+	bool gameOverReported = false;
 	std::atomic<bool> generatedGameID{false};
 	std::atomic<bool> reloadingServer{false};
 	std::atomic<bool> quitServer{false};

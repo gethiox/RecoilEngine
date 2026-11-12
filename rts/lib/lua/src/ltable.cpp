@@ -109,7 +109,8 @@ static Node *mainposition (const Table *t, const TValue *key) {
     case LUA_TLIGHTUSERDATA:
       return hashpointer(t, pvalue(key));
     default:
-      return hashpointer(t, gcvalue(key));
+      /* SPRING: address independent, see CommonHeader */
+      return hashmod(t, gcvalue(key)->gch.hashid);
   }
 }
 
@@ -322,6 +323,11 @@ static void resize (lua_State *L, Table *t, int nasize, int nhsize) {
   }
   if (nold != dummynode)
     luaM_freearray(L, nold, twoto(oldhsize), Node);  /* free old array */
+}
+
+
+void luaH_resize (lua_State *L, Table *t, int nasize, int nhsize) {
+  resize(L, t, nasize, nhsize);
 }
 
 

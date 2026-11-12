@@ -92,6 +92,7 @@ typedef struct global_State {
   TString *tmname[TM_N];  /* array with tag-method names */
 
   //SPRING additions
+  lu_int32 nexthashid;  /* last hashid handed out, see CommonHeader */
   lua_Func_fopen  fopen_func;
   lua_Func_popen  popen_func;
   lua_Func_pclose pclose_func;

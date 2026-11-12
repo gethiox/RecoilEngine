@@ -3,6 +3,7 @@
 
 #include <cstdlib>
 #include <cstring> // memcpy
+#include <type_traits>
 
 #include "xsimd/xsimd.hpp"
 #include "ReadMap.h"
@@ -14,6 +15,7 @@
 #include "Game/LoadScreen.h"
 #include "System/EventHandler.h"
 #include "System/Exceptions.h"
+#include "System/creg/RawSerialize.h"
 #include "System/SpringMath.h"
 #include "System/Threading/ThreadPool.h"
 #include "System/FileSystem/ArchiveScanner.h"
@@ -25,7 +27,10 @@
 #include "System/TimeProfiler.h"
 #include "System/XSimdOps.hpp"
 #include "Game/GlobalUnsynced.h"
+#include "Sim/Features/FeatureHandler.h"
 #include "Sim/Misc/LosHandler.h"
+#include "Sim/Objects/SolidObject.h"
+#include "Sim/Path/IPathManager.h"
 
 #include "System/Misc/TracyDefs.h"
 
@@ -189,7 +194,37 @@ void CReadMap::Serialize(creg::ISerializer* s)
 	SerializeMapChangesBeforeMatch(s);
 	SerializeMapChangesDuringMatch(s);
 	SerializeTypeMap(s);
+	SerializeSyncedDerivedMaps(s);
 	s->SerializeObjectInstance(&metalMap, metalMap.GetClass());
+}
+
+void CReadMap::SerializeSyncedDerivedMaps(creg::ISerializer* s)
+{
+	RECOIL_DETAILED_TRACY_ZONE;
+	// Everything below is derived from the synced heightmap, but it is not
+	// necessarily up to date with it: updates are gated by hmUpdated, which
+	// the paced height-bounds computation resets every GAME_SPEED frames.
+	// A loaded game has to continue with exactly the same (possibly stale)
+	// data, so it is stored verbatim instead of being recomputed.
+	// the sizes are fixed by the map dimensions
+	const auto SerializeVector = [s](auto& vec) { creg::RawArchive(s).FixedPodContainer(vec); };
+
+	SerializeVector(centerHeightMap);
+
+	for (auto& mipMap: mipCenterHeightMaps)
+		SerializeVector(mipMap);
+
+	SerializeVector(maxHeightMap);
+	SerializeVector(faceNormalsSynced);
+	SerializeVector(centerNormalsSynced);
+	SerializeVector(centerNormals2D);
+	SerializeVector(slopeMap);
+
+	s->SerializeInt(&hmUpdated, sizeof(hmUpdated));
+	s->SerializeInt(&processingHeightBounds, sizeof(processingHeightBounds));
+	s->Serialize(&initHeightBounds, sizeof(initHeightBounds));
+	s->Serialize(&tempHeightBounds, sizeof(tempHeightBounds));
+	s->Serialize(&currHeightBounds, sizeof(currHeightBounds));
 }
 
 void CReadMap::SerializeMapChangesBeforeMatch(creg::ISerializer* s)
@@ -281,16 +316,22 @@ void CReadMap::PostLoad()
 	mipPointerHeightMaps.fill(nullptr);
 	mipPointerHeightMaps[0] = &centerHeightMap[0];
 
+	// mip maps were sized by Initialize() and filled by Serialize()
 	for (int i = 1; i < numHeightMipMaps; i++) {
-		mipCenterHeightMaps[i - 1].clear();
-		mipCenterHeightMaps[i - 1].resize((mapDims.mapx >> i) * (mapDims.mapy >> i));
-
 		mipPointerHeightMaps[i] = &mipCenterHeightMaps[i - 1][0];
 	}
 
-	hmUpdated = true;
+	// the synced derived maps were restored verbatim, only the unsynced
+	// (rendering) copies have to catch up with the loaded heightmap
+	unsyncedHeightMapUpdates.push_back({0, 0, mapDims.mapx, mapDims.mapy});
 
-	mapDamage->RecalcArea(0, mapDims.mapx, 0, mapDims.mapy);
+	// features are restored with their exact positions and update-queue
+	// membership, nothing has to be told that the terrain differs from the
+	// map file; the legacy path finder still has to be
+	if (!pathManager->HasExactSerialization()) {
+		const SRectangle fullRect = {0, 0, mapDims.mapx, mapDims.mapy};
+		pathManager->TerrainChange(fullRect.x1, fullRect.z1, fullRect.x2, fullRect.z2, TERRAINCHANGE_DAMAGE_RECALCULATION);
+	}
 }
 #endif //USING_CREG
 

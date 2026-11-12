@@ -68,6 +68,7 @@
 #include "System/Matrix44f.h"
 #include "System/SpringMath.h"
 #include "System/creg/DefTypes.h"
+#include "System/creg/Serializer.h"
 #include "System/creg/STL_List.h"
 #include "System/Sound/ISoundChannels.h"
 #include "System/Sync/SyncedPrimitive.h"
@@ -410,6 +411,17 @@ void CUnit::PostInit(const CUnit* builder)
 void CUnit::PostLoad()
 {
 	RECOIL_DETAILED_TRACY_ZONE;
+	// snapshots leave out the (unsynced) selection volume; same as in PreInit
+	if (creg::IsSkippingUnsyncedMembers() && model != nullptr) {
+		selectionVolume = unitDef->selectionVolume;
+		selectionVolume.InitDefault(float4(model->radius, model->height,  xsize * SQUARE_SIZE, zsize * SQUARE_SIZE));
+	}
+
+	// unsynced, not saved: as in PreInit
+	leaveTracks = unitDef->decalDef.leaveTrackDecals;
+	// not saved either; as UpdateVoidState sets it
+	noSelect = (IsInVoid() || !unitDef->selectable);
+
 	UpdateRenderParams();
 	eventHandler.RenderUnitPreCreated(this);
 	eventHandler.RenderUnitCreated(this, isCloaked);
@@ -2834,8 +2846,8 @@ CR_REG_METADATA(CUnit, (
 	CR_MEMBER(unitDef),
 	CR_MEMBER(shieldWeapon),
 	CR_MEMBER(stockpileWeapon),
-	CR_MEMBER(selfdExpDamages),
-	CR_MEMBER(deathExpDamages),
+	CR_IGNORED(selfdExpDamages), // see Serialize
+	CR_IGNORED(deathExpDamages), // see Serialize
 
 	CR_MEMBER(featureDefID),
 
@@ -2990,9 +3002,9 @@ CR_REG_METADATA(CUnit, (
 
 	CR_MEMBER(selfDCountdown),
 
-	CR_MEMBER(definedIconName),
+	CR_MEMBER_UNSYNCED(definedIconName), // copied from the (unsynced Lua changeable) def icon, see UpdateRenderParams
 	CR_MEMBER_UN(currentIconIndex),
-	CR_MEMBER(customIconIndex),
+	CR_MEMBER_UNSYNCED(customIconIndex), // set by unsynced Lua (Spring.SetUnitIcon)
 	CR_MEMBER_UN(drawIcon),
 
 	CR_MEMBER(transportedUnits),
@@ -3004,7 +3016,7 @@ CR_REG_METADATA(CUnit, (
 	CR_MEMBER_UN(leaveTracks),
 
 	CR_MEMBER_UN(isSelected),
-	CR_MEMBER(iconRadius),
+	CR_MEMBER_UNSYNCED(iconRadius),
 
 	CR_MEMBER(stunned),
 	CR_MEMBER_UN(noGroup),
@@ -3017,8 +3029,15 @@ CR_REG_METADATA(CUnit, (
 
 //	CR_MEMBER(empDecline),
 
+	CR_SERIALIZER(Serialize),
 	CR_POSTLOAD(PostLoad)
 ))
+
+void CUnit::Serialize(creg::ISerializer* s)
+{
+	DynDamageArray::SerializeRef(s, selfdExpDamages);
+	DynDamageArray::SerializeRef(s, deathExpDamages);
+}
 
 CR_BIND(CUnit::TransportedUnit,)
 

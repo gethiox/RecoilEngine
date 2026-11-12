@@ -130,6 +130,7 @@ Udata *luaS_newudata (lua_State *L, size_t s, Table *e) {
   u = lua_cast(Udata *, luaM_malloc(L, s + sizeof(Udata)));
   u->uv.marked = luaC_white(G(L));  /* is not finalized */
   u->uv.tt = LUA_TUSERDATA;
+  u->uv.hashid = ++G(L)->nexthashid;
   u->uv.len = s;
   u->uv.metatable = NULL;
   u->uv.env = e;

@@ -5,6 +5,8 @@
 #include "Map/ReadMap.h"
 #include "Map/Ground.h"
 #include "Sim/Misc/CollisionVolume.h"
+#include "Rendering/Models/LocalModelPiece.hpp"
+#include "System/creg/Serializer.h"
 #include "Sim/Misc/DamageArray.h"
 #include "Sim/Misc/GroundBlockingObjectMap.h"
 #include "Sim/MoveTypes/MoveDefHandler.h"
@@ -55,14 +57,14 @@ CR_REG_METADATA(CSolidObject,
 
 	CR_MEMBER(creationFrame),
 
-	CR_MEMBER(pieceHitFrames),
+	CR_IGNORED(pieceHitFrames), // see Serialize
 
 	CR_MEMBER(moveDef),
 
 	CR_MEMBER(localModel),
 	CR_MEMBER(collisionVolume),
-	CR_MEMBER(selectionVolume), // unsynced, could also be ignored
-	CR_MEMBER(hitModelPieces),
+	CR_MEMBER_UNSYNCED(selectionVolume), // unsynced, could also be ignored
+	CR_IGNORED(hitModelPieces), // see Serialize
 
 	CR_MEMBER(frontdir),
 	CR_MEMBER(rightdir),
@@ -77,12 +79,13 @@ CR_REG_METADATA(CSolidObject,
 
 	CR_MEMBER(dragScales),
 
-	CR_MEMBER(drawPos),
-	CR_MEMBER(drawMidPos),
+	CR_MEMBER_UNSYNCED(drawPos),
+	CR_MEMBER_UNSYNCED(drawMidPos),
 
 	CR_MEMBER(buildFacing),
 	CR_MEMBER(modParams),
 
+	CR_SERIALIZER(Serialize),
 	CR_POSTLOAD(PostLoad)
 ))
 
@@ -90,6 +93,33 @@ CR_REG_METADATA(CSolidObject,
 CSolidObject::CSolidObject()
 	: creationFrame { gs->frameNum }
 {}
+
+CSolidObject::CSolidObject(bool syncedObject)
+	: CWorldObject(syncedObject)
+	, creationFrame { gs->frameNum }
+{}
+
+void CSolidObject::Serialize(creg::ISerializer* s)
+{
+	// [1] is the piece last hit by a synced projectile, [0] by an unsynced one
+	// (those are not part of snapshots)
+	const auto slot = [&](int i) {
+		s->SerializeInt(&pieceHitFrames[i], sizeof(pieceHitFrames[i]));
+		s->SerializeObjectPtr(reinterpret_cast<void**>(const_cast<LocalModelPiece**>(&hitModelPieces[i])), LocalModelPiece::StaticClass());
+	};
+
+	slot(1);
+
+	if (!creg::IsSkippingUnsyncedMembers()) {
+		slot(0);
+		return;
+	}
+
+	if (!s->IsWriting()) {
+		pieceHitFrames[0] = -1;
+		hitModelPieces[0] = nullptr;
+	}
+}
 
 void CSolidObject::PostLoad()
 {

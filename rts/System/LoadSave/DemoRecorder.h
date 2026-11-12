@@ -40,6 +40,10 @@ public:
 		std::swap(winningAllyTeams, r.winningAllyTeams);
 
 		std::swap(isServerDemo, r.isServerDemo);
+
+		std::swap(lastChunkPos, r.lastChunkPos);
+		std::swap(historyPos, r.historyPos);
+		std::swap(historyStream, r.historyStream);
 		return *this;
 	}
 
@@ -48,6 +52,15 @@ public:
 
 	void WriteSetupText(const std::string& text);
 	void SaveToDemo(const unsigned char* buf, const unsigned length, const float modGameTime);
+
+	/**
+	 * Earlier packets that are received after later ones (the history of a
+	 * game joined from a snapshot): MarkHistoryBeforeLastChunk sets their
+	 * position in the stream, SaveHistoryToDemo collects them in order. They
+	 * are inserted there when the demo is written.
+	 */
+	void MarkHistoryBeforeLastChunk();
+	void SaveHistoryToDemo(const unsigned char* buf, const unsigned length, const float modGameTime);
 
 	void SetStream();
 	void SetName(const std::string& mapName, const std::string& modName);
@@ -68,6 +81,7 @@ private:
 	void WriteTeamStats();
 	void WriteWinnerList();
 	void WriteDemoFile();
+	void InsertHistory();
 
 private:
 	gzFile file = nullptr;
@@ -77,6 +91,13 @@ private:
 	std::vector<unsigned char> winningAllyTeams;
 
 	bool isServerDemo = false;
+
+	/// stream position of the last chunk saved by SaveToDemo
+	size_t lastChunkPos = 0;
+	/// stream position of the history, 0 if none
+	size_t historyPos = 0;
+	/// chunks saved by SaveHistoryToDemo
+	std::string historyStream;
 };
 
 

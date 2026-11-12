@@ -32,6 +32,7 @@ namespace creg {
 	enum ClassMemberFlag {
 		CM_NoSerialize = 1, /// Make the serializers skip the member
 		CM_Config = 2,  // Exposed in config
+		CM_Unsynced = 4, /// Client specific; skipped while SetSkipUnsyncedMembers(true)
 	};
 
 	// Fundamental/basic types
@@ -491,6 +492,14 @@ public: \
   */
 #define CR_FAKE(Member) \
 	class_->AddMember( #Member, creg::IType::CreateFakeType(), 0, 0, (creg::ClassMemberFlag) currentMemberFlags) // NOLINT{misc-sizeof-container}
+
+/** @def CR_MEMBER_UNSYNCED
+ * Registers a member variable that is client specific (e.g. rendering state).
+ * It is saved in regular saved games, but not in game snapshots, which have
+ * to be identical on every client (see creg::SetSkipUnsyncedMembers).
+ */
+#define CR_MEMBER_UNSYNCED(Member) \
+	class_->AddMember( #Member, creg::GetType(null->Member), offsetof_creg(Type, Member), alignof(decltype(Type::Member)), (creg::ClassMemberFlag) (currentMemberFlags | creg::CM_Unsynced))
 
 /** @def CR_MEMBER_UN
  * Registers a member variable that is unsynced.

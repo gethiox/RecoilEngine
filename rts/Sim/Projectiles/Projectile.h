@@ -28,6 +28,8 @@ class CProjectile: public CExpGenSpawnable
 	CR_DECLARE_DERIVED(CProjectile)
 
 public:
+	bool IsSynced() const override { return synced; }
+
 	friend class CGenericParticleProjectile;
 	CProjectile();
 	CProjectile(
@@ -40,6 +42,8 @@ public:
 		bool isHitScan = false
 	);
 	virtual ~CProjectile();
+
+	void PostLoad();
 
 	virtual void Collision() { Delete(); }
 	virtual void Collision(CUnit* unit) { Collision(); }

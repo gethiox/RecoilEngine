@@ -41,7 +41,7 @@ CR_REG_METADATA(CBuilderCAI , (
 	CR_MEMBER(ownerBuilder),
 	CR_MEMBER(building),
 	CR_MEMBER(range3D),
-	CR_IGNORED(build),
+	CR_IGNORED(build), // see Serialize
 	CR_IGNORED(buildOptions),
 
 	CR_MEMBER(cachedRadiusId),
@@ -53,6 +53,7 @@ CR_REG_METADATA(CBuilderCAI , (
 	CR_MEMBER(lastPC1),
 	CR_MEMBER(lastPC2),
 	CR_MEMBER(lastPC3),
+	CR_SERIALIZER(Serialize),
 	CR_POSTLOAD(PostLoad),
 	CR_PREALLOC(GetPreallocContainer)
 ))
@@ -265,12 +266,22 @@ void CBuilderCAI::PostLoad()
 
 	ownerBuilder = static_cast<CBuilder*>(owner);
 
-	const Command& c = commandQue.front();
+	// build (the current build site) is restored by Serialize: it was
+	// computed when the build started, from the height map of that time
+}
 
-	if (buildOptions.find(c.GetID()) != buildOptions.end()) {
-		build.Parse(c);
-		build.pos = CGameHelper::Pos2BuildPos(build, true);
-	}
+void CBuilderCAI::Serialize(creg::ISerializer* s)
+{
+	int defID = (build.def != nullptr) ? build.def->id : -1;
+
+	s->SerializeInt(&defID, sizeof(defID));
+	s->Serialize(&build.pos, sizeof(build.pos));
+	s->SerializeInt(&build.buildFacing, sizeof(build.buildFacing));
+
+	if (s->IsWriting())
+		return;
+
+	build.def = (defID >= 0) ? unitDefHandler->GetUnitDefByID(defID) : nullptr;
 }
 
 float CBuilderCAI::GetBuildRange(const float targetRadius) const

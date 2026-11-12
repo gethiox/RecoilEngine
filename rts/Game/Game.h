@@ -65,6 +65,7 @@ private:
 	void LoadLua(bool onlySynced, bool onlyUnsynced);
 	void LoadSkirmishAIs();
 	void LoadFinalize();
+	void Serialize(creg::ISerializer* s);
 	void PostLoad();
 
 	void KillMisc();
@@ -149,6 +150,9 @@ private:
 	void StartPlaying();
 
 public:
+	/// local part of StartPlaying for a client that joined from a snapshot
+	void StartPlayingFromSnapshot();
+
 	GameDrawMode gameDrawMode = gameNotDrawing;
 
 	unsigned char gameID[16];

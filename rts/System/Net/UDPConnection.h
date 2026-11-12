@@ -81,6 +81,11 @@ public:
 class UDPConnection : public CConnection
 {
 public:
+	void SetOutgoingBandwidthLimit(int bytesPerSecond) override { outgoingLimitOverride = bytesPerSecond; hasOutgoingLimitOverride = true; }
+	/// the usage average is reset as well: with the bulk transfer's rate still in it the link would send nothing until it decayed below the restored limit
+	void ResetOutgoingBandwidthLimit() override { hasOutgoingLimitOverride = false; outgoing.Reset(); }
+	size_t GetOutgoingQueueBytes() const override;
+
 	UDPConnection(std::shared_ptr<asio::ip::udp::socket> netSocket, const asio::ip::udp::endpoint& myAddr);
 	UDPConnection(int sourceport, const std::string& address, const unsigned port);
 	UDPConnection(CConnection& conn);
@@ -185,6 +190,11 @@ private:
 
 	/// outgoing stuff (pure data without header) waiting to be sent
 	std::deque< std::shared_ptr<const RawPacket> > outgoingData;
+
+	/// configured outgoing bandwidth limit unless overridden (see SetOutgoingBandwidthLimit)
+	int GetOutgoingLimit() const;
+	int outgoingLimitOverride = 0;
+	bool hasOutgoingLimitOverride = false;
 	/// packets we have received but not yet read
 	std::vector< std::pair<int, RawPacket> > waitingPackets;
 	spring::unordered_set<int> incomingChunkNums;
@@ -217,6 +227,8 @@ private:
 #endif
 
 	int lastInOrder;
+	/// lastInOrder as sent in our last packet
+	int lastAckSent;
 	int lastNak;
 
 	/// Our socket
@@ -249,6 +261,7 @@ private:
 		BandwidthUsage() = default;
 		void UpdateTime(unsigned newTime);
 		void DataSent(unsigned amount, bool prel = false);
+		void Reset() { average = 0.0f; trafficSinceLastTime = 0; prelTrafficSinceLastTime = 0; }
 
 		float GetAverage(bool prel = false) const;
 

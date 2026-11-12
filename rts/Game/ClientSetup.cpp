@@ -75,6 +75,9 @@ void ClientSetup::LoadFromStartScript(const std::string& setup)
 	if (file.SGetValue(autohostport, "GAME\\AutohostPort"))
 		configHandler->SetString("AutohostPort", autohostport, true);
 
+	// lobbies can offer joining from a snapshot per game
+	file.GetDef(snapshotJoin, "-1", "GAME\\SnapshotJoin");
+
 	file.GetDef(saveFile, "", "GAME\\SaveFile");
 	file.GetDef(demoFile, "", "GAME\\DemoFile");
 }

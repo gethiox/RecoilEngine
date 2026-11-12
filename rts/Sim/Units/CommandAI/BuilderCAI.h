@@ -28,6 +28,7 @@ public:
 	~CBuilderCAI();
 
 	void PostLoad();
+	void Serialize(creg::ISerializer* s);
 
 	int GetDefaultCmd(const CUnit* unit, const CFeature* feature);
 	void SlowUpdate();

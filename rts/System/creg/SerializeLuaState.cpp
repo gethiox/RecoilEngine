@@ -2,6 +2,7 @@
 #include "SerializeLuaState.h"
 
 #include "VarTypes.h"
+#include "Serializer.h"
 
 #ifndef UNIT_TEST
 #include "Sim/Features/FeatureDefHandler.h"
@@ -14,7 +15,10 @@
 #include "System/UnorderedMap.hpp"
 #include "System/StringUtil.h"
 #include "System/Log/ILog.h"
+#include "System/Exceptions.h"
+#include "System/SpringFormat.h"
 #include <deque>
+#include <unordered_map>
 
 struct creg_lua_State;
 struct creg_Proto;
@@ -85,8 +89,8 @@ static spring::unsynced_map<lua_CFunction, std::string> funcToName;
  * Converted from lobject.h
  */
 
-#define creg_CommonHeader creg_GCObject* next; lu_byte tt; lu_byte marked
-#define CR_COMMON_HEADER() CR_MEMBER(next), CR_MEMBER(tt), CR_MEMBER(marked)
+#define creg_CommonHeader creg_GCObject* next; lu_byte tt; lu_byte marked; lu_int32 hashid
+#define CR_COMMON_HEADER() CR_MEMBER(next), CR_MEMBER(tt), CR_MEMBER(marked), CR_MEMBER(hashid)
 
 union creg_Value{
 	creg_GCObject *gc;
@@ -331,6 +335,7 @@ struct creg_global_State {
 	creg_TString *tmname[TM_N];  /* array with tag-method names */
 
 	//SPRING additions
+	lu_int32 nexthashid;
 	lua_Func_fopen  fopen_func;
 	lua_Func_popen  popen_func;
 	lua_Func_pclose pclose_func;
@@ -392,6 +397,13 @@ union creg_GCObject {
 
 // Specialization because we have to figure the real class and not
 // serialize GCObject* pointers.
+// C closures that Lua code creates at run time (and may hold on to across
+// frames): not reachable from the globals or the registry, so the automatic
+// registration cannot find them
+int gmatch_aux(lua_State* L);   // lstrlib.cpp, string.gmatch
+int luaB_auxwrap(lua_State* L); // lbaselib.cpp, coroutine.wrap
+// (LuaInterCall.cpp registers the Script.LuaRules.X / Script.LuaGaia.X closures' function itself)
+
 namespace creg {
 template<>
 class ObjectPointerType<creg_GCObject> : public IType
@@ -475,13 +487,13 @@ CR_BIND_POOL(creg_Table, , luaContext.alloc, freeProtector)
 CR_REG_METADATA(creg_Table, (
 	CR_COMMON_HEADER(),
 	CR_MEMBER(flags),
-	CR_MEMBER(lsizenode),
+	CR_IGNORED(lsizenode), // see Serialize (canonical for weak tables in snapshots)
 	CR_MEMBER(metatable),
 	CR_IGNORED(array), //vector
 	CR_IGNORED(node), //vector
 	CR_IGNORED(lastfree), //serialized separately
 	CR_IGNORED(gclist), //probably unneeded
-	CR_MEMBER(sizearray),
+	CR_IGNORED(sizearray), // see Serialize
 	CR_SERIALIZER(Serialize),
 	CR_POSTLOAD(PostLoad)
 ))
@@ -604,6 +616,7 @@ CR_REG_METADATA(creg_global_State, (
 	CR_MEMBER(uvhead),
 	CR_MEMBER(mt),
 	CR_MEMBER(tmname),
+	CR_MEMBER(nexthashid),
 	CR_IGNORED(fopen_func),
 	CR_IGNORED(popen_func),
 	CR_IGNORED(pclose_func),
@@ -654,13 +667,25 @@ CR_REG_METADATA(creg_LG, (
 ))
 
 
+// the Lua allocator refuses allocations beyond the configured limit: a load
+// that hits it must fail instead of writing through a null pointer
+static void* AllocOrThrow(size_t size)
+{
+	void* p = luaContext.alloc(size);
+
+	if (p == nullptr && size > 0)
+		throw content_error("[creg::SerializeLuaState] out of Lua memory while loading (LuaAllocLimit)");
+
+	return p;
+}
+
 template<typename T, typename C>
 inline void SerializeCVector(creg::ISerializer* s, T** vecPtr, C count)
 {
 	std::unique_ptr<creg::IType> elemType = creg::DeduceType<T>::Get();
 	T* vec;
 	if (!(s->IsWriting())) {
-		vec = (T*) luaContext.alloc(count * sizeof(T));
+		vec = (T*) AllocOrThrow(count * sizeof(T));
 		*vecPtr = vec;
 	} else {
 		vec = *vecPtr;
@@ -751,13 +776,76 @@ void creg_Node::Serialize(creg::ISerializer* s)
 }
 
 
+// tables stored in their canonical form, built once every object is loaded
+// (their keys hash by creation ids that are loaded with the key objects)
+static std::unordered_map<creg_Table*, creg::CanonicalTable> pendingCanonicalTables;
+
+void creg::ClearPendingLuaTables()
+{
+	pendingCanonicalTables.clear();
+}
+
 void creg_Table::Serialize(creg::ISerializer* s)
 {
+	creg_Node* dummy = GetDummyNode();
+
+	// a table whose layout depends on the collector's timing (weak) or on
+	// addresses is stored canonically in snapshots: the sizes a rehash of its
+	// contents gives and the contents in a canonical order; the live table is
+	// left alone (its iteration order on this client must not change)
+	uint8_t canonical = 0;
+	creg::CanonicalTable canon;
+
+	if (s->IsWriting() && creg::IsSkippingUnsyncedMembers() && creg::TableHasHistoryDependentLayout(reinterpret_cast<const Table*>(this))) {
+		creg::ComputeCanonicalTable(reinterpret_cast<const Table*>(this), canon);
+		canonical = 1;
+	}
+
+	s->SerializeInt(&canonical, sizeof(canonical));
+
+	if (canonical) {
+		int32_t nasize = canon.nasize;
+		int32_t nhsize = canon.nhsize;
+		uint32_t count = canon.entries.size();
+
+		s->SerializeInt(&nasize, sizeof(nasize));
+		s->SerializeInt(&nhsize, sizeof(nhsize));
+		s->SerializeInt(&count, sizeof(count));
+
+		if (!s->IsWriting()) {
+			if (nasize < 0 || nhsize < 0 || count > uint32_t(1) << 28)
+				throw content_error("Save corrupted: invalid canonical table");
+
+			canon.nasize = nasize;
+			canon.nhsize = nhsize;
+			canon.entries.resize(count);
+
+			// a valid empty table until PostLoad builds it
+			array = nullptr;
+			sizearray = 0;
+			node = dummy;
+			lsizenode = 0;
+			lastfree = dummy;
+		}
+
+		for (auto& e: canon.entries) {
+			SerializeInstance(s, reinterpret_cast<creg_TValue*>(&e.first));
+			SerializeInstance(s, reinterpret_cast<creg_TValue*>(&e.second));
+		}
+
+		if (!s->IsWriting())
+			pendingCanonicalTables[this] = std::move(canon);
+
+		return;
+	}
+
+	s->SerializeInt(&lsizenode, sizeof(lsizenode));
+	s->SerializeInt(&sizearray, sizeof(sizearray));
+
 	int sizenode = twoto(lsizenode);
 
 	SerializeCVector(s, &array, sizearray);
 	bool empty;
-	creg_Node* dummy = GetDummyNode();
 	if (s->IsWriting())
 		empty = (node == dummy);
 
@@ -785,15 +873,40 @@ void creg_Table::Serialize(creg::ISerializer* s)
 
 void creg_Table::PostLoad()
 {
+	if (const auto it = pendingCanonicalTables.find(this); it != pendingCanonicalTables.end()) {
+		lua_State* L = luaContext.GetMainthread();
+		Table* t = reinterpret_cast<Table*>(this);
+		creg::CanonicalTable canon = std::move(it->second);
+		pendingCanonicalTables.erase(it);
+
+		// the same layout on every client that loads this snapshot: sized
+		// once, filled in the stored order (at most nhsize hash entries, so
+		// nothing is rehashed while filling). Unlike the loader's own
+		// allocations these go through Lua's accounting, but the stored
+		// counter already includes the canonical sizes (AdjustLuaAccounting)
+		global_State* g = G(L);
+		const lu_mem totalbytes = g->totalbytes;
+
+		luaH_resize(L, t, canon.nasize, canon.nhsize);
+
+		for (const auto& e: canon.entries) {
+			TValue* v = luaH_set(L, t, &e.first);
+			setobj2t(L, v, &e.second);
+		}
+
+		g->totalbytes = totalbytes;
+		return;
+	}
+
 	// table may contain pointers as keys so will require reordering
 	int sizenode = twoto(lsizenode);
 
+	// tables, functions, userdata and threads are hashed by their (restored)
+	// hashid, so only light userdata keys still depend on memory addresses
 	bool reorder = false;
 	for (int i = 0; i < sizenode; ++i) {
 		int tt = node[i].i_key.nk.tt;
-		if (tt != LUA_TNIL && tt != LUA_TBOOLEAN &&
-		    tt != LUA_TNUMBER && tt != LUA_TSTRING &&
-		    tt != LUA_TDEADKEY) {
+		if (tt == LUA_TLIGHTUSERDATA) {
 			reorder = true;
 			break;
 		}
@@ -801,17 +914,12 @@ void creg_Table::PostLoad()
 	if (!reorder)
 		return;
 
+	// Keys hashed by address moved, so the hash part has to be rebuilt. Keep
+	// its size: unlike the slot order of address-hashed keys (which differs
+	// between clients anyway) the size is deterministic, and it decides when
+	// the table gets rehashed next.
 	lua_State* L = luaContext.GetMainthread();
-	// see ltable.cpp
-	lsizenode = 0;
-	creg_Node* onode = node;
-	node = GetDummyNode();
-	lastfree = node;
-	for (int i = 0; i < sizenode; ++i) {
-		if (onode[i].i_val.tt != LUA_TNIL)
-			setobjt2t(L, luaH_set(L, (Table*) this, (TValue*) &(onode[i].i_key.tvk)), (TValue*) &(onode[i].i_val));
-	}
-	luaContext.Getfrealloc()(luaContext.GetContext(), onode, sizenode * sizeof(Node), 0);
+	luaH_resizearray(L, (Table*) this, sizearray);
 }
 
 
@@ -854,6 +962,7 @@ void creg_TString::Serialize(creg::ISerializer* s)
 	if (!s->IsWriting()) {
 		((char *)(this+1))[u.tsv.len] = '\0';
 		u.tsv.hash = lua_calchash(getstr(this), u.tsv.len);
+		u.tsv.hashid = 0; // strings are hashed by content
 	}
 }
 
@@ -874,20 +983,24 @@ void creg_CClosure::Serialize(creg::ISerializer* s)
 
 	creg::StringType sType;
 	if (s->IsWriting()) {
-		if (funcToName.find(f) == funcToName.end()) {
-			LOG_L(L_ERROR, "Function with address 0x%p not found during serialization", f);
-		}
-		assert(funcToName.find(f) != funcToName.end());
-		std::string name = funcToName[f];
+		const auto it = funcToName.find(f);
+
+		// a name-less function could not be restored: refuse to write such a
+		// state instead of producing one that crashes on load
+		if (it == funcToName.end())
+			throw content_error(spring::format("[creg::CClosure] C function at address %p is not registered", (void*) f));
+
+		std::string name = it->second;
 		sType.Serialize(s, &name);
 	} else {
 		std::string name;
 		sType.Serialize(s, &name);
-		if (nameToFunc.find(name) == nameToFunc.end()) {
-			LOG_L(L_ERROR, "Function with name %s was not found during deserialization", name.c_str());
-		}
-		assert(nameToFunc.find(name) != nameToFunc.end());
-		f = nameToFunc[name];
+		const auto it = nameToFunc.find(name);
+
+		if (it == nameToFunc.end())
+			throw content_error("[creg::CClosure] C function \"" + name + "\" is not registered");
+
+		f = it->second;
 	}
 }
 
@@ -917,6 +1030,7 @@ void creg_Udata::Serialize(creg::ISerializer* s)
 	SerializePtr(s, &u.uv.next);
 	s->SerializeInt(&u.uv.tt, sizeof(u.uv.tt));
 	s->SerializeInt(&u.uv.marked, sizeof(u.uv.marked));
+	s->SerializeInt(&u.uv.hashid, sizeof(u.uv.hashid));
 	SerializePtr(s, &u.uv.metatable);
 	SerializePtr(s, &u.uv.env);
 	s->SerializeInt(&u.uv.len, sizeof(u.uv.len));
@@ -956,7 +1070,13 @@ void creg_lua_State::Serialize(creg::ISerializer* s)
 	ptrdiff_t top_offset;
 	ptrdiff_t savedpc_offset;
 	if (s->IsWriting()) {
-		ci_offset = ci - base_ci;
+		// a coroutine that died with an error keeps the frame the error was
+		// raised in (lua_resume does not unwind); it can never run again, so
+		// it is stored without frames (the function slot below a base frame
+		// is not a closure)
+		const bool deadWithError = (status != 0 && status != LUA_YIELD);
+
+		ci_offset = deadWithError ? 0 : (ci - base_ci);
 		base_offset = base - stack;
 		top_offset = top - stack;
 		assert(end_ci == base_ci + size_ci - 1);
@@ -979,11 +1099,11 @@ void creg_lua_State::Serialize(creg::ISerializer* s)
 	}
 
 	if (!s->IsWriting()) {
-		base_ci = (CallInfo *) luaContext.alloc(size_ci * sizeof(*base_ci));
+		base_ci = (CallInfo *) AllocOrThrow(size_ci * sizeof(*base_ci));
 		ci = base_ci + ci_offset;
 		end_ci = base_ci + size_ci - 1;
 
-		stack = (StkId) luaContext.alloc(stacksize * sizeof(*stack));
+		stack = (StkId) AllocOrThrow(stacksize * sizeof(*stack));
 		base = stack + base_offset;
 		top = stack + top_offset;
 		stack_last = stack + stacksize - EXTRA_STACK - 1;
@@ -1019,9 +1139,21 @@ void creg_lua_State::Serialize(creg::ISerializer* s)
 		} else {
 			c_savedpc_offset = 0;
 		}
-		s->SerializeInt(&c->nresults, sizeof(c->nresults));
-		s->SerializeInt(&c->tailcalls, sizeof(c->tailcalls));
+		// Lua never initializes (or reads) the tail call count of C functions and
+		// the results of the base frame; write zeros instead of stale memory
+		int c_nresults = c->nresults;
+		int c_tailcalls = c->tailcalls;
+		if (s->IsWriting()) {
+			if (c == base_ci)
+				c_nresults = 0;
+			if (c == base_ci || !ttisfunction(c->func) || clvalue(c->func)->c.isC)
+				c_tailcalls = 0;
+		}
+		s->SerializeInt(&c_nresults, sizeof(c->nresults));
+		s->SerializeInt(&c_tailcalls, sizeof(c->tailcalls));
 		if (!s->IsWriting()) {
+			c->nresults = c_nresults;
+			c->tailcalls = c_tailcalls;
 			c->base = stack + c_base_offset;
 			c->top = stack + c_top_offset;
 			c->func = stack + c_func_offset;
@@ -1033,6 +1165,13 @@ void creg_lua_State::Serialize(creg::ISerializer* s)
 
 void creg_lua_State::PostLoad()
 {
+	// not stored: no error handler is active outside of a call, no hook is
+	// set (Lua reads neither for a loaded, not running thread, but an
+	// unprotected error would longjmp to a garbage address)
+	errorJmp = nullptr;
+	hook = nullptr;
+	setnilvalue(&env);
+
 	if (base_ci == ci)
 		return;
 
@@ -1096,12 +1235,16 @@ void SerializeLuaState(creg::ISerializer* s, lua_State** L)
 	if (s->IsWriting()) {
 		assert(*L != nullptr);
 		clg = (creg_LG*) *L;
-		// a garbage pointer that needs fixing
+		// a garbage pointer that needs fixing; the list head's header bytes
+		// are never initialized by Lua (heap garbage differs per process)
 		clg->g.uvhead.next = nullptr;
 		clg->g.uvhead.v = nullptr;
+		clg->g.uvhead.tt = LUA_TUPVAL;
+		clg->g.uvhead.marked = 0;
+		clg->g.uvhead.hashid = 0;
 	} else {
 		assert(*L == nullptr);
-		clg = (creg_LG*) luaContext.alloc(sizeof(creg_LG));
+		clg = (creg_LG*) AllocOrThrow(sizeof(creg_LG));
 		*L = (lua_State*) &(clg->l);
 		luaContext.SetMainthread(*L);
 	}
@@ -1186,6 +1329,9 @@ void AutoRegisterCFunctions(const std::string& handle, lua_State* L)
 	lua_getregistry(L);
 	RecursiveAutoRegisterTable(handle, L, 0);
 	lua_pop(L, 1);
+
+	RegisterCFunction("gmatch_aux", ::gmatch_aux);
+	RegisterCFunction("luaB_auxwrap", ::luaB_auxwrap);
 }
 
 void UnregisterAllCFunctions() {

@@ -53,6 +53,9 @@ public:
 	// FIXME temp fix for CBaseGroundDrawer and AI interface, which need raw data
 	const unsigned short& front() const { return losmap.front(); }
 	const auto& GetLosMap() const { return losmap; }
+
+	/// raw access for (de)serialization, size must not be changed
+	auto& GetLosMapForSerialization() { return losmap; }
 private:
 	void LosAdd(SLosInstance* instance) const;
 	void UnsafeLosAdd(SLosInstance* instance) const;

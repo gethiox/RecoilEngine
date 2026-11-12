@@ -52,6 +52,7 @@ CDemoRecorder::~CDemoRecorder()
 	if (file == nullptr)
 		return;
 
+	InsertHistory();
 	WriteWinnerList();
 	WritePlayerStats();
 	WriteTeamStats();
@@ -133,9 +134,56 @@ void CDemoRecorder::SaveToDemo(const unsigned char* buf, const unsigned length, 
 	chunkHeader.modGameTime = modGameTime;
 	chunkHeader.length = length;
 	chunkHeader.swab();
+
+	lastChunkPos = demoStreams[isServerDemo].size();
 	demoStreams[isServerDemo].append(reinterpret_cast<const char*>(&chunkHeader), sizeof(chunkHeader));
 	demoStreams[isServerDemo].append(reinterpret_cast<const char*>(buf), length);
 	fileHeader.demoStreamSize += (length + sizeof(chunkHeader));
+}
+
+void CDemoRecorder::MarkHistoryBeforeLastChunk()
+{
+	assert(lastChunkPos > 0);
+	historyPos = lastChunkPos;
+}
+
+void CDemoRecorder::SaveHistoryToDemo(const unsigned char* buf, const unsigned length, const float modGameTime)
+{
+	DemoStreamChunkHeader chunkHeader;
+
+	chunkHeader.modGameTime = modGameTime;
+	chunkHeader.length = length;
+	chunkHeader.swab();
+
+	historyStream.append(reinterpret_cast<const char*>(&chunkHeader), sizeof(chunkHeader));
+	historyStream.append(reinterpret_cast<const char*>(buf), length);
+}
+
+void CDemoRecorder::InsertHistory()
+{
+	if (historyPos == 0 || historyStream.empty())
+		return;
+
+	std::string& stream = demoStreams[isServerDemo];
+	assert(historyPos <= stream.size());
+
+	// called from the destructor: a failed allocation (two copies of a long
+	// game's stream) must not end the process, the demo is written without
+	try {
+		stream.insert(historyPos, historyStream);
+	} catch (const std::bad_alloc&) {
+		LOG_L(L_ERROR, "[DemoRecorder::%s] out of memory inserting " _STPF_ " bytes of game history, the demo will be incomplete", __func__, historyStream.size());
+		historyStream.clear();
+		historyPos = 0;
+		return;
+	}
+
+	fileHeader.demoStreamSize += historyStream.size();
+
+	LOG("[DemoRecorder::%s] inserted " _STPF_ " bytes of game history", __func__, historyStream.size());
+
+	historyStream.clear();
+	historyPos = 0;
 }
 
 void CDemoRecorder::SetName(const std::string& mapName, const std::string& modName)

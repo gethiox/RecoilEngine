@@ -104,6 +104,7 @@ public:
 	CFeature* CreateWreck(int wreckLevel, int smokeTime);
 
 private:
+	void Serialize(creg::ISerializer* s);
 	void PostLoad();
 
 	static int ChunkNumber(float f);

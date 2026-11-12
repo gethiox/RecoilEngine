@@ -19,8 +19,11 @@ namespace GL {
 			TRACK_TYPE_NONE = 2,
 		};
 
+		bool IsSynced() const override { return false; }
+
 		Light()
-			: position(0.0f, 0.0f, 1.0f, 1.0f)
+			: CObject(false)
+			, position(0.0f, 0.0f, 1.0f, 1.0f)
 			, direction(ZeroVector)
 
 			, ambientColor(0.0f, 0.0f, 0.0f, 1.0f)

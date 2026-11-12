@@ -29,6 +29,10 @@ public:
 
 	bool isHost;
 
+	/// GAME\SnapshotJoin: join a running game from a snapshot (1) or by
+	/// re-simulating it (0); -1 if not set, the SnapshotJoin config decides
+	int snapshotJoin = -1;
+
 	std::string showServerName;
 };
 

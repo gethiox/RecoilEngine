@@ -6,11 +6,16 @@
 #include "creg_cond.h"
 #include "System/UnorderedMap.hpp"
 
+#include <algorithm>
 #include <map>
 
 #ifdef USING_CREG
 
+#include <cstdint>
+#include <stdexcept>
 #include <string>
+#include <type_traits>
+#include <vector>
 
 namespace creg
 {
@@ -72,6 +77,75 @@ namespace creg
 		std::string GetName() const { return "map<" + DeduceType<typename T::key_type>::Get()->GetName() + ", " + DeduceType<typename T::mapped_type>::Get()->GetName() + ">"; }
 	};
 
+	/**
+	 * Hash map that stores its exact internal layout, so a loaded map
+	 * iterates in the very same order as the saved one (an open-addressing
+	 * map's order depends on its insertion/erase history, re-inserting the
+	 * elements does not reproduce it). Not usable for keys hashed by address.
+	 */
+	template<typename T>
+	struct ExactLayoutHashMapType : public IType
+	{
+		ExactLayoutHashMapType() : IType(sizeof(T)) { }
+
+		void Serialize(ISerializer* s, void* instance)
+		{
+			T& ct = *(T*)instance;
+
+			uint64_t numBuckets = ct.layout_bucket_count();
+			int32_t maxProbeLength = ct.layout_max_probe_length();
+			s->SerializeInt(&numBuckets, sizeof(numBuckets));
+			s->SerializeInt(&maxProbeLength, sizeof(maxProbeLength));
+
+			// the stream may come from another client: a few hundred million
+			// buckets is far beyond any map of the game
+			if (numBuckets > (uint64_t(1) << 28) || (numBuckets & (numBuckets - 1)) != 0)
+				throw std::runtime_error("[creg::ExactLayoutHashMapType] invalid bucket count");
+			// -1: no probe happened yet (an empty or never-collided map)
+			if (!s->IsWriting() && (maxProbeLength < -1 || uint64_t(std::max(maxProbeLength, 0)) > numBuckets))
+				throw std::runtime_error("[creg::ExactLayoutHashMapType] invalid probe length");
+
+			std::vector<uint8_t> states(numBuckets);
+
+			if (s->IsWriting()) {
+				for (size_t b = 0; b < numBuckets; b++)
+					states[b] = ct.layout_state(b);
+			}
+
+			s->Serialize(states.data(), static_cast<int>(numBuckets));
+
+			if (!s->IsWriting()) {
+				for (size_t b = 0; b < numBuckets; b++) {
+					if (states[b] > T::LAYOUT_STATE_FILLED)
+						throw std::runtime_error("[creg::ExactLayoutHashMapType] invalid bucket state");
+				}
+			}
+
+			if (s->IsWriting()) {
+				// iteration order is bucket order
+				for (auto& p: ct) {
+					DeduceType<typename T::key_type>::Get()->Serialize(s, (void*) &p.first);
+					DeduceType<typename T::mapped_type>::Get()->Serialize(s, &p.second);
+				}
+				return;
+			}
+
+			ct.layout_restore(numBuckets, maxProbeLength, states);
+
+			for (size_t b = 0; b < numBuckets; b++) {
+				if (states[b] != T::LAYOUT_STATE_FILLED)
+					continue;
+
+				typename T::key_type key{};
+				DeduceType<typename T::key_type>::Get()->Serialize(s, &key);
+				auto& p = ct.layout_fill(b, std::move(key));
+				DeduceType<typename T::mapped_type>::Get()->Serialize(s, &p.second);
+			}
+		}
+
+		std::string GetName() const { return "hashmap<" + DeduceType<typename T::key_type>::Get()->GetName() + ", " + DeduceType<typename T::mapped_type>::Get()->GetName() + ">"; }
+	};
+
 	// Map type
 	template<typename TKey, typename TValue>
 	struct DeduceType<std::map<TKey, TValue> > {
@@ -89,8 +163,14 @@ namespace creg
 	// Hash map
 	template<typename TKey, typename TValue>
 	struct DeduceType<spring::unordered_map<TKey, TValue> > {
+		using MapT = spring::unordered_map<TKey, TValue>;
+
 		static std::unique_ptr<IType> Get() {
-			return std::unique_ptr<IType>(new MapType<spring::unordered_map<TKey, TValue> >());
+			// keys hashed by address cannot keep their layout across processes
+			if constexpr (!std::is_pointer_v<TKey> && requires (MapT& m) { m.layout_bucket_count(); })
+				return std::unique_ptr<IType>(new ExactLayoutHashMapType<MapT>());
+			else
+				return std::unique_ptr<IType>(new MapType<MapT>());
 		}
 	};
 	template<typename TKey, typename TValue>

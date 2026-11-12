@@ -14,6 +14,7 @@
 #include "Sim/Path/IPathManager.h"
 #include "Sim/Features/FeatureHandler.h"
 #include "System/TimeProfiler.h"
+#include "System/creg/RawSerialize.h"
 
 #include "System/Misc/TracyDefs.h"
 
@@ -250,6 +251,63 @@ void CBasicMapDamage::RecalcArea(int x1, int x2, int y1, int y2)
 		SCOPED_TIMER("Sim::BasicMapDamage::Path");
 		pathManager->TerrainChange(x1, y1, x2, y2, TERRAINCHANGE_DAMAGE_RECALCULATION);
 	}
+}
+
+
+void CBasicMapDamage::Serialize(creg::ISerializer* s)
+{
+	// Explosions change the terrain over EXPLOSION_LIFETIME frames; a loaded
+	// game has to finish the pending ones exactly. Only the queue entries not
+	// yet popped and the squares they reference in explosionSquaresPool are
+	// stored (the pool is a ring buffer, nothing else in it is read again).
+	creg::RawArchive ar(s);
+	ar.Marker(0x4d444d47); // 'MDMG'
+
+	const size_t poolSize = explosionSquaresPool.size();
+	std::vector<Explo> pending;
+
+	if (ar.IsWriting())
+		pending.assign(explosionUpdateQueue.begin() + explUpdateQueueIdx, explosionUpdateQueue.end());
+
+	ar.Value(explSquaresPoolIdx);
+	ar.Container(pending, [&](creg::RawArchive& ar, Explo& e) {
+		ar.Array(&e.pos.x, 3);
+		ar.Value(e.strength);
+		ar.Value(e.radius);
+		ar.Value(e.ttl);
+		ar.Value(e.x1);
+		ar.Value(e.x2);
+		ar.Value(e.y1);
+		ar.Value(e.y2);
+		ar.Value(e.idx);
+		ar.Container(e.buildings, [](creg::RawArchive& ar, ExploBuilding& b) {
+			ar.Value(b.id);
+			ar.Value(b.dif);
+			ar.Value(b.tx1);
+			ar.Value(b.tx2);
+			ar.Value(b.tz1);
+			ar.Value(b.tz2);
+		});
+
+		const bool validArea = (e.x1 >= 1 && e.x1 <= e.x2 && e.x2 <= mapDims.mapxm1 && e.y1 >= 1 && e.y1 <= e.y2 && e.y2 <= mapDims.mapym1);
+		const size_t numSquares = validArea ? size_t(e.x2 - e.x1 + 1) * size_t(e.y2 - e.y1 + 1) : 0;
+
+		if (ar.IsReading() && (!validArea || numSquares > poolSize || e.idx >= poolSize))
+			throw content_error("[CBasicMapDamage::Serialize] invalid explosion area");
+
+		for (size_t i = 0; i < numSquares; i++) {
+			ar.Value(explosionSquaresPool[(e.idx + i) % poolSize]);
+		}
+	}, 1 << 20);
+
+	if (ar.IsReading() && explSquaresPoolIdx >= poolSize)
+		throw content_error("[CBasicMapDamage::Serialize] invalid square pool index");
+
+	if (ar.IsWriting())
+		return;
+
+	explosionUpdateQueue = std::move(pending);
+	explUpdateQueueIdx = 0;
 }
 
 

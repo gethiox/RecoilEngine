@@ -47,6 +47,23 @@ public:
 	bool isLocal = false;
 	bool isReconn = false;
 	bool isMidgameJoin = false;
+	/// admitted without a password (AllowSpectatorJoin): not trusted as a snapshot source
+	bool unauthenticated = false;
+
+	/// joining via a game snapshot which is still being prepared; the client
+	/// gets no game packets until it was sent the snapshot (or told to catch up)
+	bool awaitingSnapshot = false;
+	/// frames before this one are covered by the client's snapshot (no sync responses)
+	int syncCheckStartFrame = 0;
+	/// joined from a snapshot and still simulating frames the server has
+	/// evaluated already: their checksums are compared as they arrive
+	/// (CGameServer::lateSyncReference); the number verified so far, -1 if not
+	int lateSyncChecks = -1;
+	/// frames of that catch-up that had no agreed checksum left to compare with
+	int lateSyncMisses = 0;
+	/// the last frame this client sent a sync checksum for (lastFrameResponse
+	/// also follows keyframe acknowledgements, which run ahead of the simulation while catching up)
+	int lastSyncResponseFrame = 0;
 
 	PlayerStatistics lastStats;
 

@@ -124,6 +124,8 @@
 #include "System/FileSystem/FileSystem.h"
 #include "System/LoadSave/LoadSaveHandler.h"
 #include "System/LoadSave/DemoRecorder.h"
+#include "Game/SimStateTestHooks.h"
+#include "Net/SnapshotJoinClient.h"
 #include "System/Log/ILog.h"
 #include "System/Platform/Misc.h"
 #include "System/Platform/Watchdog.h"
@@ -182,7 +184,7 @@ CR_REG_METADATA(CGame, (
 
 	// FIXME: atomic type deduction
 	CR_IGNORED(loadDone),
-	CR_IGNORED(gameOver),
+	CR_IGNORED(gameOver), // see Serialize (atomic)
 
 	CR_IGNORED(gameDrawMode),
 	CR_MEMBER(showFPS),
@@ -219,6 +221,7 @@ CR_REG_METADATA(CGame, (
 	CR_IGNORED(gameInputReceiver),
 
 	// Post Load
+	CR_SERIALIZER(Serialize),
 	CR_POSTLOAD(PostLoad)
 ))
 
@@ -291,6 +294,9 @@ CGame::~CGame()
 	ENTER_SYNCED_CODE();
 	LOG("[Game::%s][1]", __func__);
 
+	SimStateTestHooks::Kill();
+	// stops a snapshot upload (uses clientNet from another thread)
+	snapshotJoinClient.Reset();
 	RmlGui::Shutdown();
 	helper->Kill();
 	KillLua(true);
@@ -362,6 +368,7 @@ void CGame::Load(const std::string& mapFileName)
 	Watchdog::RegisterThread(WDT_LOAD);
 
 	ZoneScoped;
+	SimStateTestHooks::Init();
 
 	std::vector<std::string> contentErrors;
 
@@ -468,7 +475,21 @@ void CGame::Load(const std::string& mapFileName)
 				loadscreen->SetLoadMessage("Loading Saved Game");
 				{
 					auto lock = CLoadLock::GetUniqueLock();
-					saveFileHandler->LoadGame();
+
+					try {
+						saveFileHandler->LoadGame();
+					} catch (const content_error& e) {
+						// a snapshot has passed the sources' digest agreement and
+						// this client's own checks by now; what remains are
+						// archives or an engine build that differ from the
+						// sources' after all (or a hostile state). Reconnecting
+						// gets the classic catch-up (SnapshotJoinCooldown).
+						if (!saveFileHandler->IsSnapshot())
+							throw;
+
+						throw content_error(std::string("The snapshot of the running game could not be loaded: ") + e.what() + ". Reconnect to the game to join it from its start instead.");
+					}
+
 					Watchdog::ClearTimer(WDT_LOAD);
 				}
 				LoadLua(false, true);
@@ -487,11 +508,20 @@ void CGame::Load(const std::string& mapFileName)
 			// Update height bounds and pathing after pregame or a saved game load.
 			{
 				ENTER_SYNCED_CODE();
-				//needed in case pre-game terraform changed the map
-				readMap->UpdateHeightBounds();
-				Watchdog::ClearTimer(WDT_LOAD);
-				pathManager->PostFinalizeRefresh();
-				Watchdog::ClearTimer(WDT_LOAD);
+				// a saved game restores both exactly (if supported by the path manager)
+				const bool exactSavedState = (saveFileHandler != nullptr && pathManager->HasExactSerialization());
+
+				if (!exactSavedState) {
+					//needed in case pre-game terraform changed the map
+					readMap->UpdateHeightBounds();
+					Watchdog::ClearTimer(WDT_LOAD);
+					pathManager->PostFinalizeRefresh();
+					Watchdog::ClearTimer(WDT_LOAD);
+				}
+
+				if (saveFileHandler != nullptr)
+					SimStateTestHooks::PostLoadGame(gs->frameNum);
+
 				LEAVE_SYNCED_CODE();
 			}
 
@@ -860,7 +890,9 @@ void CGame::LoadLua(bool dryRun, bool onlyUnsynced)
 	assert(!(dryRun && onlyUnsynced));
 	// Lua components
 	ENTER_SYNCED_CODE();
-	CLuaHandle::SetDevMode(gameSetup->luaDevMode);
+	// a loaded game restored the flag (and its synced Lua states were loaded with it)
+	if (!onlyUnsynced)
+		CLuaHandle::SetDevMode(gameSetup->luaDevMode);
 	LOG("[Game::%s] Lua developer mode %sabled", __func__, (CLuaHandle::GetDevMode()? "en": "dis"));
 
 	const std::string prefix = (dryRun ? "Synced " : (onlyUnsynced ? "Unsynced " : ""));
@@ -881,7 +913,7 @@ void CGame::LoadLua(bool dryRun, bool onlyUnsynced)
 
 	LEAVE_SYNCED_CODE();
 
-	if (!dryRun) {
+	if (!dryRun && !SimStateTestHooks::IsLuaUIDisabled()) {
 		loadscreen->SetLoadMessage("Loading LuaUI");
 		auto lock = CLoadLock::GetUniqueLock();
 		CLuaUI::LoadFreeHandler();
@@ -939,6 +971,17 @@ void CGame::LoadFinalize()
 	updateDeltaSeconds = 0.0f;
 }
 
+
+void CGame::Serialize(creg::ISerializer* s)
+{
+	// set by GameEnd, which synced Lua triggers on every client in the same
+	// frame (Spring.GameOver) and reads back (Spring.IsGameOver)
+	uint8_t over = gameOver;
+	s->SerializeInt(&over, sizeof(over));
+
+	if (!s->IsWriting())
+		gameOver = (over != 0);
+}
 
 void CGame::PostLoad()
 {
@@ -1183,6 +1226,7 @@ bool CGame::Update()
 
 	jobDispatcher.Update();
 	clientNet->Update();
+	SimStateTestHooks::Update();
 
 	// When video recording do step by step simulation, so each simframe gets a corresponding videoframe
 	// FIXME: SERVER ALREADY DOES THIS BY ITSELF
@@ -1693,6 +1737,48 @@ void CGame::StartPlaying()
 		eventHandler.GameStart();
 }
 
+void CGame::StartPlayingFromSnapshot()
+{
+	RECOIL_DETAILED_TRACY_ZONE;
+	// the synced effects of starting (playing, start positions, GameStart)
+	// are part of the loaded snapshot, only the local ones are missing
+	playing = true;
+
+	lastReadNetTime = spring_gettime();
+
+	gu->startTime = gu->gameTime;
+	gu->myTeam = gu->GetMyPlayer()->team;
+	gu->myAllyTeam = teamHandler.AllyTeam(gu->myTeam);
+
+	// the loaded player may differ from the start script (a player who
+	// resigned or whose team died before the marker spectates now), as
+	// CPlayer::StartSpectating / JoinTeam would have set it
+	const bool spectator = gu->GetMyPlayer()->spectator;
+
+	gu->spectating = spectator;
+	gu->spectatingFullView = spectator;
+	gu->spectatingFullSelect = spectator;
+
+	if (!spectator) {
+		gu->myPlayingTeam = gu->myTeam;
+		gu->myPlayingAllyTeam = gu->myAllyTeam;
+	} else {
+		// what CPlayer::StartSpectating does for the local player
+		selectedUnitsHandler.ClearSelected();
+
+		if (readMap != nullptr)
+			readMap->BecomeSpectator();
+
+		unitTracker.Disable();
+	}
+
+	GameSetupDrawer::Disable();
+	CLuaUI::UpdateTeams();
+
+	// unsynced Lua was initialized with the start script's identity
+	eventHandler.PlayerChanged(gu->myPlayerNum);
+}
+
 static const char* const tracingSimFrameName = "SimFrame";
 
 void CGame::SimFrame() {
@@ -1857,6 +1943,7 @@ void CGame::GameEnd(const std::vector<unsigned char>& winningAllyTeams, bool tim
 		// needs work)
 		if (!configHandler->GetBool("GameEndOnConnectionLoss")) {
 			LOG_L(L_WARNING, "[%s] lost connection to server; continuing game", __func__);
+			snapshotJoinClient.ConnectionLost();
 			clientNet->InitLocalClient();
 			return;
 		}

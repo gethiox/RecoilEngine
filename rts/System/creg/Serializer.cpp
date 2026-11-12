@@ -124,6 +124,11 @@ void creg::WriteUInt(std::ostream* stream, uint64_t val)
 	WriteVarSizeUInt(stream, val);
 }
 
+static bool skipUnsyncedMembers = false;
+
+void creg::SetSkipUnsyncedMembers(bool skip) { skipUnsyncedMembers = skip; }
+bool creg::IsSkippingUnsyncedMembers() { return skipUnsyncedMembers; }
+
 //-------------------------------------------------------------------------
 // Base output serializer
 //-------------------------------------------------------------------------
@@ -161,7 +166,7 @@ void COutputStreamSerializer::SerializeObject(Class* c, void* ptr, ObjectRef* ob
 	for (uint a = 0; a < c->members.size(); a++)
 	{
 		creg::Class::Member* m = &c->members[a];
-		if (m->flags & CM_NoSerialize)
+		if ((m->flags & CM_NoSerialize) || ((m->flags & CM_Unsynced) && skipUnsyncedMembers))
 			continue;
 
 		ObjectMember om;
@@ -176,6 +181,9 @@ void COutputStreamSerializer::SerializeObject(Class* c, void* ptr, ObjectRef* ob
 		omg.members.push_back(om);
 		omg.size += om.size;
 		LOG_SL(LOG_SECTION_CREG_SERIALIZER, L_DEBUG, "Serialized %s::%s type:%s size:%d", c->name, m->name, m->type->GetName().c_str(), om.size);
+
+		if (layout != nullptr)
+			layout->push_back({mstart, mend, c->name, m->name});
 	}
 
 
@@ -187,6 +195,9 @@ void COutputStreamSerializer::SerializeObject(Class* c, void* ptr, ObjectRef* ob
 		c->CallSerializeProc(ptr, this);
 		unsigned mend = stream->tellp();
 		om.size = mend - mstart;
+
+		if (layout != nullptr)
+			layout->push_back({mstart, mend, c->name, "<Serialize>"});
 		omg.members.push_back(om);
 		omg.size += om.size;
 	}
@@ -434,7 +445,7 @@ void CInputStreamSerializer::SerializeObject(Class* c, void* ptr)
 	for (uint a = 0; a < c->members.size(); a++)
 	{
 		creg::Class::Member* m = &c->members[a];
-		if (m->flags & CM_NoSerialize)
+		if ((m->flags & CM_NoSerialize) || ((m->flags & CM_Unsynced) && skipUnsyncedMembers))
 			continue;
 
 		const unsigned oldPos = stream->tellg();
@@ -479,6 +490,11 @@ void CInputStreamSerializer::SerializeObjectPtr(void** ptr, creg::Class* cls)
 		throw content_error("Save corrupted: object reference " + IntToString(id) + " out of range (" + IntToString(objects.size()) + " objects)");
 	if (id) {
 		StoredObject& o = objects [id];
+
+		// the referenced object has to be of the pointer's class (or derived from it)
+		if (cls != nullptr && !classRefs[o.classRef]->IsSubclassOf(cls))
+			throw content_error(std::string("Save corrupted: object reference of class ") + classRefs[o.classRef]->name + " where " + cls->name + " was expected");
+
 		if (o.obj) *ptr = o.obj;
 		else {
 			// The object is not yet available, so it needs fixing afterwards
@@ -571,6 +587,11 @@ void CInputStreamSerializer::LoadPackage(std::istream* s, void*& root, creg::Cla
 			throw content_error("Metadata checksum error: Package file was saved with a different version");
 	}
 
+	// the package may come from another client (a snapshot): every index and
+	// size read from it is checked before use
+	if (ph.numObjects < 2)
+		throw content_error("Save corrupted: no root object");
+
 	// Create all non-embedded objects
 	s->seekg(ph.objTableOffset);
 	objects.resize(ph.numObjects);
@@ -588,6 +609,10 @@ void CInputStreamSerializer::LoadPackage(std::istream* s, void*& root, creg::Cla
 
 		ReadVarSizeUInt(stream, &classRefIndex);
 		stream->read((char*)&isEmbedded, sizeof(char));
+
+		if (classRefIndex >= classRefs.size())
+			throw content_error("Save corrupted: class reference " + IntToString(classRefIndex) + " out of range");
+
 		Class* c = classRefs[classRefIndex];
 
 		objects[a].obj = nullptr;
@@ -598,11 +623,19 @@ void CInputStreamSerializer::LoadPackage(std::istream* s, void*& root, creg::Cla
 			if (c->HasGetSize())
 				ReadVarSizeUInt(stream, &size);
 
+			// a variable size object (e.g. a Lua closure with fewer upvalues than
+			// the describing struct has) can be smaller than its class, never absurd
+			if (size == 0 || size > (size_t(1) << 30))
+				throw content_error(std::string("Save corrupted: invalid size of a ") + c->name);
+
 			if (c->HasPrealloc()) {
 				PreallocObj po;
 				po.size = size;
 				ReadVarSizeUInt(stream, &po.contID);
 				ReadVarSizeUInt(stream, &po.offset);
+
+				if (po.contID >= ph.numObjects)
+					throw content_error("Save corrupted: preallocation container " + IntToString(po.contID) + " out of range");
 				// Postpone objects with placement-new
 				preallocObjs[a] = po;
 			} else {

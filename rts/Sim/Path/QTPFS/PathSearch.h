@@ -15,6 +15,7 @@
 struct CollisionVolume;
 
 namespace QTPFS {
+	class PathManagerSerializer;
 	struct IPath;
 	struct NodeLayer;
 	struct PathCache;
@@ -73,6 +74,8 @@ namespace QTPFS {
 	}
 
 	struct PathSearch {
+		friend class PathManagerSerializer;
+
 		void SetID(unsigned int n) { searchID = n; }
 		void SetTeam(unsigned int n) { searchTeam = n; }
 		unsigned int GetID() const { return searchID; }
@@ -227,14 +230,14 @@ namespace QTPFS {
 		float3 searchLimitMins;
 		float3 searchLimitMaxs;
 
-		float gDists[QTPFS_MAX_NETPOINTS_PER_NODE_EDGE];
-		float hDists[QTPFS_MAX_NETPOINTS_PER_NODE_EDGE];
-		float gCosts[QTPFS_MAX_NETPOINTS_PER_NODE_EDGE];
-		float hCosts[QTPFS_MAX_NETPOINTS_PER_NODE_EDGE];
+		float gDists[QTPFS_MAX_NETPOINTS_PER_NODE_EDGE] = {};
+		float hDists[QTPFS_MAX_NETPOINTS_PER_NODE_EDGE] = {};
+		float gCosts[QTPFS_MAX_NETPOINTS_PER_NODE_EDGE] = {};
+		float hCosts[QTPFS_MAX_NETPOINTS_PER_NODE_EDGE] = {};
 
 		float hCostMult;
 		float goalDistance = 0.f;
-		float adjustedGoalDistance;
+		float adjustedGoalDistance = 0.0f;
 
 		int fwdStepIndex = 0;
 		int bwdStepIndex = 0;
@@ -246,7 +249,7 @@ namespace QTPFS {
 
 		bool haveFullPath;
 		bool havePartPath;
-		bool badGoal;
+		bool badGoal = false;
 
 public:
 		bool rawPathCheck = false;

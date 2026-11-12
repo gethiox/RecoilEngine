@@ -106,6 +106,13 @@ public:
 	static void DecRef(const DynDamageArray* dda);
 	static DynDamageArray* GetMutable(const DynDamageArray*& dda);
 
+	/**
+	 * Serializes a counted reference. Arrays owned by a WeaponDef are not
+	 * part of the saved state, so references to them are stored as the
+	 * def's id and re-pointed to that same array (keeping it shared) on load.
+	 */
+	static void SerializeRef(creg::ISerializer* s, const DynDamageArray*& dda);
+
 	float dynDamageExp;
 	float dynDamageMin;
 	float dynDamageRange;
@@ -116,6 +123,7 @@ public:
 	float explosionSpeed;
 	mutable int refCount;
 	bool fromDef;
+	int defID = -1; ///< id of the owning WeaponDef if fromDef
 };
 
 #endif

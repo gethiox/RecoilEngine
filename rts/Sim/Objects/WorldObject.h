@@ -34,6 +34,14 @@ public:
 		SetVelocity(spd);
 	}
 
+	/// see CObject::IsSynced
+	explicit CWorldObject(bool syncedObject): CObject(syncedObject) {}
+	CWorldObject(const float3& pos, const float3& spd, bool syncedObject): CWorldObject(syncedObject)
+	{
+		SetPosition(pos);
+		SetVelocity(spd);
+	}
+
 	virtual ~CWorldObject() {}
 
 	// NOTE: used only by projectiles, SolidObject's override this!
@@ -99,7 +107,7 @@ public:
 
 	S3DModel* model = nullptr;
 protected:
-	float drawRadius = 0.0f;    ///< unsynced, used for projectile visibility culling
+	float drawRadius = 0.0f;    ///< used for projectile visibility culling; set from synced data only
 public:
 	std::array<int, ThreadPool::MAX_THREADS> mtTempNum = {};
 };

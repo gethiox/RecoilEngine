@@ -1,6 +1,7 @@
 /* This file is part of the Spring engine (GPL v2 or later), see LICENSE.html */
 
 #include "Command.h"
+#include "System/creg/Serializer.h"
 #include "CommandParamsPool.hpp"
 
 CommandParamsPool cmdParamsPool;
@@ -99,6 +100,14 @@ void Command::CopyParams(const Command& c) {
 
 void Command::Serialize(creg::ISerializer* s) {
 	if (s->IsWriting()) {
+		// stored as they are, also the key of a timed wait: it is the same on
+		// every client for waits issued through the network, and a loaded
+		// client is then one of them. (The owning client replaces the key of a
+		// factory-built unit's wait by a local one, CWaitCommandsAI::
+		// AddLocalUnit; its snapshot differs from the others' then and the
+		// join falls back, which is the safe outcome: a canonical 0 would
+		// have made the joiner the only client with that value, visible to
+		// Lua through the command queues.)
 		for (unsigned int i = 0; i < numParams; i++) {
 			float p = GetParam(i);
 			s->Serialize(&p, sizeof(p));
