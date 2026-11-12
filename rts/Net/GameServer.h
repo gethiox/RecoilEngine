@@ -317,6 +317,8 @@ private:
 	mutable spring::recursive_mutex gameServerMutex;
 
 	std::atomic<bool> gameHasStarted{false};
+	/// a client reported the game over (the client-side effects of that are not part of a snapshot)
+	bool gameOverReported = false;
 	std::atomic<bool> generatedGameID{false};
 	std::atomic<bool> reloadingServer{false};
 	std::atomic<bool> quitServer{false};

@@ -129,6 +129,12 @@ bool CSnapshotJoinServer::TryBegin(GameParticipant& joiner, bool clientWantsSnap
 		return false;
 	if (!server->gameHasStarted || server->demoReader != nullptr || joiner.isLocal)
 		return false;
+	// a client's end-of-game handling (statistics, winners, the game-over
+	// event) runs on the GAMEOVER packet, which the classic catch-up replays
+	if (server->gameOverReported) {
+		server->Message(spring::format("[SnapshotJoin] the game is over, %s catches up instead", joiner.name.c_str()), false);
+		return false;
+	}
 
 	if (HostsNativeAI(joiner.id)) {
 		server->Message(spring::format("[SnapshotJoin] %s hosts a native AI, catching up instead", joiner.name.c_str()), false);

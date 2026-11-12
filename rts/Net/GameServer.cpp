@@ -1957,6 +1957,7 @@ void CGameServer::ProcessPacket(const unsigned playerNum, std::shared_ptr<const 
 					hostif->SendGameOver(playerNum, winningAllyTeams);
 
 				Broadcast(CBaseNetProtocol::Get().SendGameOver(playerNum, winningAllyTeams));
+				gameOverReported = true;
 			} catch (const netcode::UnpackPacketException& ex) {
 				Message(spring::format("Player %s sent invalid GameOver: %s", players[a].name.c_str(), ex.what()));
 			}

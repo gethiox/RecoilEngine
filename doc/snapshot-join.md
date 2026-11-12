@@ -250,6 +250,47 @@ start script still have to wait, as anyone could connect with their name.
 * A player without a password in the start script who restarted the game
   (e.g. after a crash) can only rejoin once the old connection was silent for
   `ReconnectTimeout`, like before; see "Rejoining after a crash".
+* Once a client reported the game over, joiners catch up classically: the
+  client-side effects of the GAMEOVER packet (statistics, winners, the
+  `GameOver` event) are not part of a snapshot, the classic catch-up replays
+  the packet.
+* A snapshot that passed the sources' digest agreement and the joiner's own
+  checks but still fails to deserialize (archives or an engine build that
+  differ after all, or a hostile state agreed on by colluding sources) ends
+  the joining client with an error that asks to reconnect; the reconnect
+  falls within `SnapshotJoinCooldown` and catches up classically. The loader
+  validates every index, size and class it reads, so such a state fails
+  cleanly instead of corrupting memory.
+* The `Engine` and `Game` tables of the synced Lua states no longer contain
+  anything that depends on the build flavour or on the client: `versionFull`
+  is the sync version, `buildFlags` is empty and `textColorCodes` are the
+  engine's default codes there (unsynced states keep the full version, the
+  flags and the client's font setting). A headless and a graphical client,
+  or two clients with different `TextDisableOldColorIndicators` settings,
+  had different synced heaps before, so they could never agree on a
+  snapshot; synced gadgets could not rely on these values either, since they
+  differed between the clients of one game.
+* **Lua tables and the collector.** The layout of a Lua table (and with it
+  the order `pairs` visits it in) depends on more than its contents: the
+  incremental collector marks removed keys dead when it traverses a table,
+  and a key re-inserted afterwards may land in another slot; weak tables lose
+  entries whenever the collector runs. Recoil runs the synced collector in
+  wall-clock budgeted steps, so this part of a table's history differs
+  between clients that otherwise agree on everything. Snapshots store weak
+  tables (and tables with light-userdata keys) in a canonical form, so the
+  sources agree on them, but a joiner rebuilds them in that canonical order
+  while the other clients keep their own: synced code that iterates a weak
+  table and lets the order matter would diverge on the joiner (code that
+  does this is already unsound, since the order differs between the original
+  clients whenever an entry was collected on one of them, but a weak table
+  whose entries are all held strongly elsewhere iterates identically on all
+  original clients today). Strong tables are stored as they are, so a dead
+  key that exists on one source only makes the digests differ and the join
+  fall back. The complete fix is a deterministic synced collector (a fixed
+  amount of work per simulation frame instead of a time budget): the synced
+  heap would then be identical on every client and could be stored verbatim,
+  with no canonical forms at all. That is an engine-wide behaviour change
+  outside the scope of this branch.
 
 ## Testing
 

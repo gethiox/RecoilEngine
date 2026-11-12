@@ -108,6 +108,7 @@ private:
 		uint32_t numPackets = 0;
 		bool markerSeen = false; // demo insertion point known
 		bool complete = false;
+		bool unexpectedLogged = false;
 	} history;
 
 	// source

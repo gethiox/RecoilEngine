@@ -290,7 +290,11 @@ void CSnapshotJoinClient::HandleHistory(std::shared_ptr<const netcode::RawPacket
 		const uint32_t length = packet->length - headerLen;
 
 		if (joinState != JoinState::PLAYING || !history.markerSeen || history.complete || requestID != joinRequestID) {
-			LOG_L(L_ERROR, "[SnapshotJoin] unexpected game history (request %d)", requestID);
+			// the server keeps sending after an inconsistency was found: once is enough
+			if (!history.unexpectedLogged)
+				LOG_L(L_ERROR, "[SnapshotJoin] unexpected game history (request %d)", requestID);
+
+			history.unexpectedLogged = true;
 			return;
 		}
 		if (offset != history.receivedSize || totalSize != history.expectedSize || (offset + length) > totalSize) {
