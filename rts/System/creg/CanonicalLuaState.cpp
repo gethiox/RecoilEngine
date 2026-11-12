@@ -164,12 +164,34 @@ bool KeyLess(const TValue* a, const TValue* b)
  * Rebuilding these tables from their (identical) contents in a canonical
  * order gives identical layouts; nothing synced code can rely on changes.
  */
-bool HasHistoryDependentLayout(global_State* g, const Table* t)
+// the metatable's __mode field, found by content (no global state needed)
+bool TableIsWeak(const Table* t)
+{
+	const Table* mt = t->metatable;
+
+	if (mt == nullptr)
+		return false;
+
+	for (int i = sizenode(mt); i-- > 0; ) {
+		const Node* n = gnode(mt, i);
+		const TValue* k = key2tval(n);
+
+		if (ttisnil(gval(n)) || !ttisstring(k))
+			continue;
+
+		if (strcmp(getstr(rawtsvalue(k)), "__mode") == 0)
+			return true;
+	}
+
+	return false;
+}
+
+bool HasHistoryDependentLayout(const Table* t)
 {
 	// a weak table loses entries whenever the collector runs: its array and
 	// hash sizes and its node layout are a function of the collector's
 	// timing (this includes weak tables used as arrays)
-	if (gfasttm(g, t->metatable, TM_MODE) != NULL)
+	if (TableIsWeak(t))
 		return true;
 
 	const int size = sizenode(t);
@@ -181,8 +203,7 @@ bool HasHistoryDependentLayout(global_State* g, const Table* t)
 	// light userdata keys hash by address, which differs between processes.
 	// Other object keys hash by creation id: a non-weak table keyed by them
 	// has the same layout on every client (same history), so it is stored
-	// as it is; rebuilding it would change its iteration order on the
-	// sources only.
+	// as it is.
 	for (int i = 0; i < size; i++) {
 		const Node* n = gnode(t, i);
 
@@ -252,41 +273,43 @@ int ComputeSizes(int* nums, int* narray)
 }
 
 /**
- * The sizes of a table's parts are only recomputed when an insertion finds
- * no free node, from the entries alive at that moment; for a weak table that
- * moment and that count depend on the collector's timing. Resize to what a
- * rehash of the current contents gives.
+ * What a rehash of the table's current contents would give (ltable.cpp's
+ * rehash, which is static, without an extra key), and those contents in a
+ * canonical order. Nothing is changed: a snapshot stores weak tables in this
+ * form instead of their (collector timing dependent) live layout, see
+ * creg_Table::Serialize.
  */
-void CanonicalResize(lua_State* L, Table* t)
+void ComputeCanonical(const Table* t, creg::CanonicalTable& out)
 {
 	int nums[CANON_MAXBITS + 1] = {0};
 	int nasize = 0;
 	int totaluse = 0;
 
+	out.entries.clear();
+
 	// numusearray
-	{
-		int i = 1;
+	for (int lg = 0, ttlg = 1, i = 1; lg <= CANON_MAXBITS; lg++, ttlg *= 2) {
+		int lc = 0;
+		int lim = ttlg;
 
-		for (int lg = 0, ttlg = 1; lg <= CANON_MAXBITS; lg++, ttlg *= 2) {
-			int lc = 0;
-			int lim = ttlg;
+		if (lim > t->sizearray) {
+			lim = t->sizearray;
 
-			if (lim > t->sizearray) {
-				lim = t->sizearray;
-
-				if (i > lim)
-					break;
-			}
-
-			for (; i <= lim; i++) {
-				if (!ttisnil(&t->array[i - 1]))
-					lc++;
-			}
-
-			nums[lg] += lc;
-			nasize += lc;
+			if (i > lim)
+				break;
 		}
 
+		for (; i <= lim; i++) {
+			if (!ttisnil(&t->array[i - 1])) {
+				lc++;
+				out.entries.emplace_back();
+				setnvalue(&out.entries.back().first, cast_num(i));
+				setobj(nullptr, &out.entries.back().second, &t->array[i - 1]);
+			}
+		}
+
+		nums[lg] += lc;
+		nasize += lc;
 		totaluse = nasize;
 	}
 
@@ -294,77 +317,45 @@ void CanonicalResize(lua_State* L, Table* t)
 	for (int i = sizenode(t); i-- > 0; ) {
 		const Node* n = gnode(t, i);
 
+		// removed entries (nil value, possibly a dead key) are dropped
 		if (ttisnil(gval(n)))
 			continue;
 
 		nasize += CountInt(key2tval(n), nums);
 		totaluse++;
+
+		out.entries.emplace_back();
+		setobj(nullptr, &out.entries.back().first, key2tval(n));
+		setobj(nullptr, &out.entries.back().second, gval(n));
 	}
 
 	const int na = ComputeSizes(nums, &nasize);
 
-	luaH_resize(L, t, nasize, totaluse - na);
+	out.nasize = nasize;
+	out.nhsize = totaluse - na;
+
+	std::sort(out.entries.begin(), out.entries.end(), [](const auto& a, const auto& b) { return KeyLess(&a.first, &b.first); });
 }
 
-void RebuildTable(lua_State* L, Table* t)
+size_t TableBytes(int sizearray, int nhsize, bool dummyNode)
 {
-	CanonicalResize(L, t);
-
-	// an empty hash part is the shared (read-only) dummy node now
-	if (t->lsizenode == 0 && ttisnil(gkey(gnode(t, 0))) && ttisnil(gval(gnode(t, 0))))
-		return;
-
-	const int size = sizenode(t);
-	std::vector<std::pair<TValue, TValue>> entries;
-	entries.reserve(size);
-
-	for (int i = 0; i < size; i++) {
-		const Node* n = gnode(t, i);
-
-		// removed entries (nil value, possibly a dead key) are dropped
-		if (ttisnil(gval(n)))
-			continue;
-
-		entries.emplace_back();
-		setobj(L, &entries.back().first, key2tval(n));
-		setobj(L, &entries.back().second, gval(n));
-	}
-
-	std::sort(entries.begin(), entries.end(), [](const auto& a, const auto& b) { return KeyLess(&a.first, &b.first); });
-
-	// same as setnodevector, keeping the node array
-	for (int i = 0; i < size; i++) {
-		Node* n = gnode(t, i);
-
-		gnext(n) = NULL;
-		setnilvalue(gkey(n));
-		setnilvalue(gval(n));
-	}
-
-	t->lastfree = gnode(t, size);
-
-	// at most <size> entries, so no rehash: the layout now only depends on the sorted keys
-	for (const auto& e: entries) {
-		TValue* v = luaH_set(L, t, &e.first);
-		setobj2t(L, v, &e.second);
-	}
-
-	assert(sizenode(t) == size);
+	return sizeof(TValue) * size_t(sizearray) + (dummyNode ? 0 : sizeof(Node) * size_t(nhsize));
 }
 
-void RebuildHistoryDependentTables(lua_State* L)
+// ltable.cpp's shared node of tables without a hash part (a table with an
+// allocated but empty node vector looks the same but owns its memory)
+const Node* DummyNode()
 {
-	global_State* g = G(L);
+	static const Node* dummy = nullptr;
 
-	for (GCObject* o = g->rootgc; o != nullptr; o = o->gch.next) {
-		if (o->gch.tt != LUA_TTABLE)
-			continue;
-
-		Table* t = gco2h(o);
-
-		if (HasHistoryDependentLayout(g, t))
-			RebuildTable(L, t);
+	if (dummy == nullptr) {
+		lua_State* L = lua_open();
+		lua_newtable(L);
+		dummy = hvalue(L->top - 1)->node;
+		lua_close(L);
 	}
+
+	return dummy;
 }
 
 /**
@@ -403,7 +394,7 @@ void CanonicalWhite(global_State* g)
 
 namespace creg {
 
-void MakeCanonicalLuaState(lua_State* L, lua_State* L_GC)
+ptrdiff_t MakeCanonicalLuaState(lua_State* L, lua_State* L_GC)
 {
 	// a thread outside of any call has nothing on its stack that Lua code
 	// could ever access again (C++ code may have leaked values there)
@@ -414,11 +405,8 @@ void MakeCanonicalLuaState(lua_State* L, lua_State* L_GC)
 
 	lua_gc(L_GC, LUA_GCCOLLECT, 0);
 
-	// after a collection: weak entries are gone, nothing is in a gray list
-	RebuildHistoryDependentTables(L_GC);
-
 	// sizes depend on the amount of live data; the second collection makes
-	// the collector's estimates a function of the (now canonical) heap
+	// the collector's estimates a function of the (canonical) heap
 	CanonicalSizes(L_GC);
 	lua_gc(L_GC, LUA_GCCOLLECT, 0);
 
@@ -428,6 +416,49 @@ void MakeCanonicalLuaState(lua_State* L, lua_State* L_GC)
 
 	CanonicalWhite(G(L_GC));
 	SortStringTable(G(L_GC));
+
+	// weak tables are stored in their canonical form (see creg_Table::
+	// Serialize), the live tables stay as they are: the allocation counters
+	// are adjusted to the stored sizes while writing (AdjustLuaAccounting)
+	ptrdiff_t delta = 0;
+	CanonicalTable canon;
+
+	for (GCObject* o = G(L_GC)->rootgc; o != nullptr; o = o->gch.next) {
+		if (o->gch.tt != LUA_TTABLE)
+			continue;
+
+		const Table* t = gco2h(o);
+
+		if (!HasHistoryDependentLayout(t))
+			continue;
+
+		ComputeCanonical(t, canon);
+
+		const int canonNodes = (canon.nhsize > 0) ? (1 << ceillog2(canon.nhsize)) : 0;
+
+		delta += ptrdiff_t(TableBytes(canon.nasize, canonNodes, canon.nhsize == 0));
+		delta -= ptrdiff_t(TableBytes(t->sizearray, sizenode(t), t->node == DummyNode()));
+	}
+
+	return delta;
+}
+
+bool TableHasHistoryDependentLayout(const Table* t)
+{
+	return HasHistoryDependentLayout(t);
+}
+
+void ComputeCanonicalTable(const Table* t, CanonicalTable& out)
+{
+	ComputeCanonical(t, out);
+}
+
+void AdjustLuaAccounting(lua_State* L, ptrdiff_t delta)
+{
+	global_State* g = G(L);
+
+	g->totalbytes = lu_mem(ptrdiff_t(g->totalbytes) + delta);
+	g->estimate = lu_mem(ptrdiff_t(g->estimate) + delta);
 }
 
 }

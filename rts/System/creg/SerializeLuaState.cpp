@@ -2,6 +2,7 @@
 #include "SerializeLuaState.h"
 
 #include "VarTypes.h"
+#include "Serializer.h"
 
 #ifndef UNIT_TEST
 #include "Sim/Features/FeatureDefHandler.h"
@@ -17,6 +18,7 @@
 #include "System/Exceptions.h"
 #include "System/SpringFormat.h"
 #include <deque>
+#include <unordered_map>
 
 struct creg_lua_State;
 struct creg_Proto;
@@ -484,13 +486,13 @@ CR_BIND_POOL(creg_Table, , luaContext.alloc, freeProtector)
 CR_REG_METADATA(creg_Table, (
 	CR_COMMON_HEADER(),
 	CR_MEMBER(flags),
-	CR_MEMBER(lsizenode),
+	CR_IGNORED(lsizenode), // see Serialize (canonical for weak tables in snapshots)
 	CR_MEMBER(metatable),
 	CR_IGNORED(array), //vector
 	CR_IGNORED(node), //vector
 	CR_IGNORED(lastfree), //serialized separately
 	CR_IGNORED(gclist), //probably unneeded
-	CR_MEMBER(sizearray),
+	CR_IGNORED(sizearray), // see Serialize
 	CR_SERIALIZER(Serialize),
 	CR_POSTLOAD(PostLoad)
 ))
@@ -773,13 +775,76 @@ void creg_Node::Serialize(creg::ISerializer* s)
 }
 
 
+// tables stored in their canonical form, built once every object is loaded
+// (their keys hash by creation ids that are loaded with the key objects)
+static std::unordered_map<creg_Table*, creg::CanonicalTable> pendingCanonicalTables;
+
+void creg::ClearPendingLuaTables()
+{
+	pendingCanonicalTables.clear();
+}
+
 void creg_Table::Serialize(creg::ISerializer* s)
 {
+	creg_Node* dummy = GetDummyNode();
+
+	// a table whose layout depends on the collector's timing (weak) or on
+	// addresses is stored canonically in snapshots: the sizes a rehash of its
+	// contents gives and the contents in a canonical order; the live table is
+	// left alone (its iteration order on this client must not change)
+	uint8_t canonical = 0;
+	creg::CanonicalTable canon;
+
+	if (s->IsWriting() && creg::IsSkippingUnsyncedMembers() && creg::TableHasHistoryDependentLayout(reinterpret_cast<const Table*>(this))) {
+		creg::ComputeCanonicalTable(reinterpret_cast<const Table*>(this), canon);
+		canonical = 1;
+	}
+
+	s->SerializeInt(&canonical, sizeof(canonical));
+
+	if (canonical) {
+		int32_t nasize = canon.nasize;
+		int32_t nhsize = canon.nhsize;
+		uint32_t count = canon.entries.size();
+
+		s->SerializeInt(&nasize, sizeof(nasize));
+		s->SerializeInt(&nhsize, sizeof(nhsize));
+		s->SerializeInt(&count, sizeof(count));
+
+		if (!s->IsWriting()) {
+			if (nasize < 0 || nhsize < 0 || count > uint32_t(1) << 28)
+				throw content_error("Save corrupted: invalid canonical table");
+
+			canon.nasize = nasize;
+			canon.nhsize = nhsize;
+			canon.entries.resize(count);
+
+			// a valid empty table until PostLoad builds it
+			array = nullptr;
+			sizearray = 0;
+			node = dummy;
+			lsizenode = 0;
+			lastfree = dummy;
+		}
+
+		for (auto& e: canon.entries) {
+			SerializeInstance(s, reinterpret_cast<creg_TValue*>(&e.first));
+			SerializeInstance(s, reinterpret_cast<creg_TValue*>(&e.second));
+		}
+
+		if (!s->IsWriting())
+			pendingCanonicalTables[this] = std::move(canon);
+
+		return;
+	}
+
+	s->SerializeInt(&lsizenode, sizeof(lsizenode));
+	s->SerializeInt(&sizearray, sizeof(sizearray));
+
 	int sizenode = twoto(lsizenode);
 
 	SerializeCVector(s, &array, sizearray);
 	bool empty;
-	creg_Node* dummy = GetDummyNode();
 	if (s->IsWriting())
 		empty = (node == dummy);
 
@@ -807,6 +872,31 @@ void creg_Table::Serialize(creg::ISerializer* s)
 
 void creg_Table::PostLoad()
 {
+	if (const auto it = pendingCanonicalTables.find(this); it != pendingCanonicalTables.end()) {
+		lua_State* L = luaContext.GetMainthread();
+		Table* t = reinterpret_cast<Table*>(this);
+		creg::CanonicalTable canon = std::move(it->second);
+		pendingCanonicalTables.erase(it);
+
+		// the same layout on every client that loads this snapshot: sized
+		// once, filled in the stored order (at most nhsize hash entries, so
+		// nothing is rehashed while filling). Unlike the loader's own
+		// allocations these go through Lua's accounting, but the stored
+		// counter already includes the canonical sizes (AdjustLuaAccounting)
+		global_State* g = G(L);
+		const lu_mem totalbytes = g->totalbytes;
+
+		luaH_resize(L, t, canon.nasize, canon.nhsize);
+
+		for (const auto& e: canon.entries) {
+			TValue* v = luaH_set(L, t, &e.first);
+			setobj2t(L, v, &e.second);
+		}
+
+		g->totalbytes = totalbytes;
+		return;
+	}
+
 	// table may contain pointers as keys so will require reordering
 	int sizenode = twoto(lsizenode);
 

@@ -313,8 +313,11 @@ public:
 	std::vector<bool> watchAllowTargetDefs; // callin masks for AllowWeapon*Target*
 	decltype(CLuaHandle::delayedCallsByFrame) delayedCallsByFrame;
 	std::vector<std::pair<std::string, std::string>> textCommands; // Script.AddActionFallback, sorted
+	ptrdiff_t byteDelta = 0; // stored (canonical) table sizes minus live ones, see MakeCanonicalLuaState
 
 	void Serialize(creg::ISerializer* s);
+	/// the allocation counters as a client loading this state will have them (and back)
+	void AdjustAccounting(bool stored) const;
 };
 
 CR_BIND(CLuaStateCollector, )
@@ -329,8 +332,17 @@ CR_REG_METADATA(CLuaStateCollector, (
 	CR_MEMBER(watchAllowTargetDefs),
 	CR_MEMBER(delayedCallsByFrame),
 	CR_IGNORED(textCommands), // see Serialize
+	CR_IGNORED(byteDelta),
 	CR_SERIALIZER(Serialize)
 ))
+
+void CLuaStateCollector::AdjustAccounting(bool stored) const
+{
+	if (!valid || byteDelta == 0)
+		return;
+
+	creg::AdjustLuaAccounting(L, stored ? byteDelta : -byteDelta);
+}
 
 void CLuaStateCollector::Read(const CSplitLuaHandle* handle) {
 	valid = (handle != nullptr) && handle->syncedLuaHandle.IsValid();
@@ -357,7 +369,7 @@ void CLuaStateCollector::Read(const CSplitLuaHandle* handle) {
 
 	// snapshots have to be equal on every client
 	if (GameSnapshot::IsActive()) {
-		creg::MakeCanonicalLuaState(L, L_GC);
+		byteDelta = creg::MakeCanonicalLuaState(L, L_GC);
 	} else {
 		lua_gc(L_GC, LUA_GCCOLLECT, 0);
 		lua_gc(L_GC, LUA_GCSTOP, 0); // see MakeCanonicalLuaState
@@ -431,7 +443,10 @@ static void SaveLuaState(CSplitLuaHandle* handle, creg::COutputStreamSerializer&
 {
 	CLuaStateCollector lsc;
 	lsc.Read(handle);
+	// the stored counters match the stored (canonical) table sizes
+	lsc.AdjustAccounting(true);
 	os.SavePackage(&oss, &lsc, lsc.GetClass());
+	lsc.AdjustAccounting(false);
 }
 
 
@@ -653,6 +668,8 @@ static void LoadLuaState(CSplitLuaHandle* handle, creg::CInputStreamSerializer& 
 	if ((handle != nullptr) && handle->syncedLuaHandle.IsValid())
 		creg::CopyLuaContext(handle->syncedLuaHandle.GetLuaState());
 
+	// an earlier load may have thrown halfway
+	creg::ClearPendingLuaTables();
 	is.LoadPackage(&iss, plsc, plsccls);
 	assert(plsc && plsccls == CLuaStateCollector::StaticClass());
 	CLuaStateCollector* lsc = static_cast<CLuaStateCollector*>(plsc);
