@@ -734,7 +734,8 @@ void UDPConnection::Flush(const bool forced)
 		do {
 			sendMore  = (outgoing.GetAverage(true) <= GetOutgoingLimit());
 			sendMore |= ((GetOutgoingLimit() <= 0) || partialPacket || forced);
-			sendMore &= (partialPacket || (unackedChunks.size() + newChunks.size()) < maxChunksInFlight);
+			// a forced flush (connection closing) sends everything; a lost chunk beyond the window is lost for good then
+			sendMore &= (partialPacket || forced || (unackedChunks.size() + newChunks.size()) < maxChunksInFlight);
 
 			if (!outgoingData.empty() && sendMore) {
 				std::shared_ptr<const RawPacket>& packet = *(outgoingData.begin());
@@ -1122,6 +1123,8 @@ size_t UDPConnection::GetOutgoingQueueBytes() const
 
 	for (const auto& packet: outgoingData)
 		bytes += packet->length;
+	for (const auto& chunk: newChunks)
+		bytes += chunk->data.size();
 	for (const auto& chunk: unackedChunks)
 		bytes += chunk->data.size();
 

@@ -82,7 +82,8 @@ class UDPConnection : public CConnection
 {
 public:
 	void SetOutgoingBandwidthLimit(int bytesPerSecond) override { outgoingLimitOverride = bytesPerSecond; hasOutgoingLimitOverride = true; }
-	void ResetOutgoingBandwidthLimit() override { hasOutgoingLimitOverride = false; }
+	/// the usage average is reset as well: with the bulk transfer's rate still in it the link would send nothing until it decayed below the restored limit
+	void ResetOutgoingBandwidthLimit() override { hasOutgoingLimitOverride = false; outgoing.Reset(); }
 	size_t GetOutgoingQueueBytes() const override;
 
 	UDPConnection(std::shared_ptr<asio::ip::udp::socket> netSocket, const asio::ip::udp::endpoint& myAddr);
@@ -260,6 +261,7 @@ private:
 		BandwidthUsage() = default;
 		void UpdateTime(unsigned newTime);
 		void DataSent(unsigned amount, bool prel = false);
+		void Reset() { average = 0.0f; trafficSinceLastTime = 0; prelTrafficSinceLastTime = 0; }
 
 		float GetAverage(bool prel = false) const;
 
