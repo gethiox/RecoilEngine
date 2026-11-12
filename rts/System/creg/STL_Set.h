@@ -6,6 +6,7 @@
 #include "creg_cond.h"
 #include "System/UnorderedSet.hpp"
 
+#include <algorithm>
 #include <cstdint>
 #include <set>
 #include <stdexcept>
@@ -66,8 +67,13 @@ namespace creg
 			s->SerializeInt(&numBuckets, sizeof(numBuckets));
 			s->SerializeInt(&maxProbeLength, sizeof(maxProbeLength));
 
-			if (numBuckets > (uint64_t(1) << 32) || (numBuckets & (numBuckets - 1)) != 0)
+			// the stream may come from another client: a few hundred million
+			// buckets is far beyond any map of the game
+			if (numBuckets > (uint64_t(1) << 28) || (numBuckets & (numBuckets - 1)) != 0)
 				throw std::runtime_error("[creg::ExactLayoutHashSetType] invalid bucket count");
+			// -1: no probe happened yet (an empty or never-collided map)
+			if (!s->IsWriting() && (maxProbeLength < -1 || uint64_t(std::max(maxProbeLength, 0)) > numBuckets))
+				throw std::runtime_error("[creg::ExactLayoutHashSetType] invalid probe length");
 
 			std::vector<uint8_t> states(numBuckets);
 
@@ -77,6 +83,13 @@ namespace creg
 			}
 
 			s->Serialize(states.data(), static_cast<int>(numBuckets));
+
+			if (!s->IsWriting()) {
+				for (size_t b = 0; b < numBuckets; b++) {
+					if (states[b] > T::LAYOUT_STATE_FILLED)
+						throw std::runtime_error("[creg::ExactLayoutHashSetType] invalid bucket state");
+				}
+			}
 
 			if (s->IsWriting()) {
 				for (const auto& v: ct)

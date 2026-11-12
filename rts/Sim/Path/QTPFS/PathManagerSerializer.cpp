@@ -104,6 +104,9 @@ void PathManagerSerializer::Io(creg::RawArchive& ar, NodeLayerSpeedInfoSweep& c)
 	ar.Value(c.updateNumLeafNodes);
 	ar.Value(c.layerNum);
 	ar.Value(c.updateInProgress);
+
+	if (ar.IsReading() && (c.layerNum < 0 || c.layerNum >= static_cast<int>(pm.nodeLayers.size())))
+		throw content_error("[QTPFS::PathManagerSerializer] sweep layer out of range");
 }
 
 void PathManagerSerializer::IoPathNode(creg::RawArchive& ar, IPath::PathNodeData& n)
@@ -202,8 +205,20 @@ void PathManagerSerializer::IoPath(creg::RawArchive& ar, IPath& p)
 	ar.Value(p.boundingBoxOverride);
 	ar.Value(p.isRawPath);
 	ar.Value(p.repathTriggered);
+	if (ar.IsReading() && (p.pathType < 0 || p.pathType >= static_cast<int>(pm.nodeLayers.size())))
+		throw content_error("[QTPFS::PathManagerSerializer] path type out of range");
+
 	ar.PodContainer(p.points);
 	ar.Container(p.nodes, [this](creg::RawArchive& a, IPath::PathNodeData& n) { IoPathNode(a, n); });
+
+	if (ar.IsReading()) {
+		const int numNodes = pm.nodeLayers[p.pathType].maxNodesAlloced;
+
+		for (const auto& n: p.nodes) {
+			if (n.nodeId < 0 || n.nodeId >= numNodes)
+				throw content_error("[QTPFS::PathManagerSerializer] path node id out of range");
+		}
+	}
 	ar.Value(p.boundingBoxMins);
 	ar.Value(p.boundingBoxMaxs);
 	ar.Value(p.goalPosition);
@@ -394,6 +409,8 @@ void PathManagerSerializer::IoNodeLayer(creg::RawArchive& ar, NodeLayer& nl)
 
 	if (nl.maxNodesAlloced < 0 || nl.maxNodesAlloced > static_cast<int32_t>(POOL_TOTAL_SIZE))
 		throw content_error("[QTPFS::PathManagerSerializer] invalid node count");
+	if (ar.IsReading() && (nl.rootNodeSize <= 0 || nl.xRootNodes <= 0 || nl.zRootNodes <= 0 || nl.numRootNodes != nl.xRootNodes * nl.zRootNodes || nl.numRootNodes > nl.maxNodesAlloced))
+		throw content_error("[QTPFS::PathManagerSerializer] invalid root node layout");
 
 	ar.PodContainer(nl.nodeIndcs, POOL_TOTAL_SIZE);
 	ar.FixedPodContainer(nl.curSpeedMods);
@@ -433,9 +450,27 @@ void PathManagerSerializer::IoNodeLayer(creg::RawArchive& ar, NodeLayer& nl)
 		}
 
 		ar.Array(n.neighbours.data(), numNeighbours);
+
+		if (!ar.IsReading())
+			continue;
+
+		// every index read has to stay within this layer's nodes
+		if (n.childBaseIndex != -1u && (n.childBaseIndex >= static_cast<uint32_t>(nl.maxNodesAlloced) || n.childBaseIndex + QTNODE_CHILD_COUNT > static_cast<uint32_t>(nl.maxNodesAlloced)))
+			throw content_error("[QTPFS::PathManagerSerializer] node child index out of range");
+
+		for (const auto& nb: n.neighbours) {
+			if (nb.nodeId < 0 || nb.nodeId >= nl.maxNodesAlloced)
+				throw content_error("[QTPFS::PathManagerSerializer] neighbour node id out of range");
+		}
 	}
 
 	if (ar.IsReading()) {
+		// the free-index stack also holds indices never handed out yet (above the high-water mark)
+		for (const auto idx: nl.nodeIndcs) {
+			if (idx >= POOL_TOTAL_SIZE)
+				throw content_error("[QTPFS::PathManagerSerializer] free node index out of range");
+		}
+
 		// scratch vectors, refilled on every update
 		nl.selectedNodes.clear();
 		nl.openNodes.clear();

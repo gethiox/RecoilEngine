@@ -212,7 +212,11 @@ static void SerializeSyncedGlobals(creg::ISerializer* s)
 		mapDamage->TerrainTypeHardnessChanged(i);
 	}
 
-	CObject::RaiseCurrentSyncID(curSyncID);
+	// exactly the saved value: creg constructed every loaded object (which
+	// advanced the counter) before this is read, their ids are overwritten
+	// with the stored ones; a loaded client must hand out the same ids as
+	// the others from here on
+	CObject::SetCurrentSyncID(curSyncID);
 	gsRNG.SetFullState(rngState);
 
 	// restored once everything is loaded: constructing objects with synced
@@ -445,7 +449,14 @@ static void SaveLuaState(CSplitLuaHandle* handle, creg::COutputStreamSerializer&
 	lsc.Read(handle);
 	// the stored counters match the stored (canonical) table sizes
 	lsc.AdjustAccounting(true);
-	os.SavePackage(&oss, &lsc, lsc.GetClass());
+
+	try {
+		os.SavePackage(&oss, &lsc, lsc.GetClass());
+	} catch (...) {
+		lsc.AdjustAccounting(false);
+		throw;
+	}
+
 	lsc.AdjustAccounting(false);
 }
 
@@ -833,6 +844,11 @@ bool CCregLoadSaveHandler::WriteSnapshot(std::string& raw)
 		oss.write(reinterpret_cast<const char*>(&frameNum), sizeof(frameNum));
 
 		WriteGameState(oss, nullptr);
+
+		// an allocation failure inside the stream only sets its state
+		if (!oss)
+			throw content_error("snapshot stream failed (out of memory?)");
+
 		// take the buffer instead of copying it (a snapshot is a few hundred MB)
 		raw = std::move(oss).str();
 		ok = true;

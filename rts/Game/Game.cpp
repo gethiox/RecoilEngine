@@ -475,7 +475,21 @@ void CGame::Load(const std::string& mapFileName)
 				loadscreen->SetLoadMessage("Loading Saved Game");
 				{
 					auto lock = CLoadLock::GetUniqueLock();
-					saveFileHandler->LoadGame();
+
+					try {
+						saveFileHandler->LoadGame();
+					} catch (const content_error& e) {
+						// a snapshot has passed the sources' digest agreement and
+						// this client's own checks by now; what remains are
+						// archives or an engine build that differ from the
+						// sources' after all (or a hostile state). Reconnecting
+						// gets the classic catch-up (SnapshotJoinCooldown).
+						if (!saveFileHandler->IsSnapshot())
+							throw;
+
+						throw content_error(std::string("The snapshot of the running game could not be loaded: ") + e.what() + ". Reconnect to the game to join it from its start instead.");
+					}
+
 					Watchdog::ClearTimer(WDT_LOAD);
 				}
 				LoadLua(false, true);
@@ -876,7 +890,9 @@ void CGame::LoadLua(bool dryRun, bool onlyUnsynced)
 	assert(!(dryRun && onlyUnsynced));
 	// Lua components
 	ENTER_SYNCED_CODE();
-	CLuaHandle::SetDevMode(gameSetup->luaDevMode);
+	// a loaded game restored the flag (and its synced Lua states were loaded with it)
+	if (!onlyUnsynced)
+		CLuaHandle::SetDevMode(gameSetup->luaDevMode);
 	LOG("[Game::%s] Lua developer mode %sabled", __func__, (CLuaHandle::GetDevMode()? "en": "dis"));
 
 	const std::string prefix = (dryRun ? "Synced " : (onlyUnsynced ? "Unsynced " : ""));

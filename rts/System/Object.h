@@ -80,6 +80,8 @@ public:
 	/// last sync id handed out (saved games restore it, see RaiseCurrentSyncID)
 	static std::int64_t GetCurrentSyncID() { return cur_sync_id; }
 	/// ensure new objects get higher sync ids than every object of a loaded game
+	/// a loaded game continues with the saved counter (every loaded object was constructed meanwhile)
+	static void SetCurrentSyncID(std::int64_t id) { cur_sync_id = id; }
 	static void RaiseCurrentSyncID(std::int64_t id) {
 		std::int64_t cur = cur_sync_id;
 		while (cur < id && !cur_sync_id.compare_exchange_weak(cur, id)) {}

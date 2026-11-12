@@ -35,6 +35,8 @@ public:
 	virtual bool LoadGameStartInfo(const std::string& file) = 0;
 	virtual void LoadGame() = 0;
 	virtual void LoadAIData() = 0;
+	/// the state of a running game received from other clients (see CSnapshotJoinClient)
+	virtual bool IsSnapshot() const { return false; }
 
 	void SaveInfo(const std::string& _mapName, const std::string& _modName) {
 		mapName = _mapName;

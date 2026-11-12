@@ -167,7 +167,17 @@ void CDemoRecorder::InsertHistory()
 	std::string& stream = demoStreams[isServerDemo];
 	assert(historyPos <= stream.size());
 
-	stream.insert(historyPos, historyStream);
+	// called from the destructor: a failed allocation (two copies of a long
+	// game's stream) must not end the process, the demo is written without
+	try {
+		stream.insert(historyPos, historyStream);
+	} catch (const std::bad_alloc&) {
+		LOG_L(L_ERROR, "[DemoRecorder::%s] out of memory inserting " _STPF_ " bytes of game history, the demo will be incomplete", __func__, historyStream.size());
+		historyStream.clear();
+		historyPos = 0;
+		return;
+	}
+
 	fileHeader.demoStreamSize += historyStream.size();
 
 	LOG("[DemoRecorder::%s] inserted " _STPF_ " bytes of game history", __func__, historyStream.size());

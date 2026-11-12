@@ -35,7 +35,7 @@ public:
 	 * (player, team, spectator state) and unsynced settings.
 	 */
 	bool LoadSnapshot(std::string&& raw, int32_t& frameNum);
-	bool IsSnapshot() const { return joinMode; }
+	bool IsSnapshot() const override { return joinMode; }
 
 protected:
 	std::stringstream iss;
