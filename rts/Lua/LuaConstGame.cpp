@@ -398,8 +398,10 @@ bool LuaConstGame::PushEntries(lua_State* L)
 		lua_rawset(L, -3);
 	}
 	{
-		// inline color-codes for text fonts
-		bool newIndicators = fontHandler.disableOldColorIndicators;
+		// inline color-codes for text fonts; a synced state is the same on
+		// every client, so it gets the engine's default codes, not this
+		// client's setting
+		const bool newIndicators = !CLuaHandle::GetHandleSynced(L) && fontHandler.disableOldColorIndicators;
 
 		/***
 		 * Table containing keys that represent the color code operations during font rendering.
