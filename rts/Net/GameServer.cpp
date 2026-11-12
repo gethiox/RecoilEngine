@@ -4,6 +4,7 @@
 #include "System/Net/UDPConnection.h"
 
 #include <functional>
+#include <limits>
 
 #if defined DEDICATED || defined DEBUG
 	#include <iostream>
@@ -96,6 +97,8 @@ static constexpr unsigned SYNCCHECK_TIMEOUT = 300;
 
 /// used to prevent msg spam
 static constexpr unsigned SYNCCHECK_MSG_TIMEOUT = 400;
+/// a client catching up from a snapshot that reports a frame this close to the live one has caught up
+static constexpr unsigned LATE_SYNC_LIVE_FRAMES = 2 * GAME_SPEED;
 
 /// The time interval in msec for sending player statistics to each client
 static const spring_time playerInfoTime = spring_secs(2);
@@ -595,6 +598,58 @@ void CGameServer::PrivateMessage(int playerNum, const std::string& message) {
 
 
 
+bool CGameServer::AnyoneCatchingUp() const
+{
+	for (const GameParticipant& p: players) {
+		if (p.clientLink == nullptr || p.myState == GameParticipant::State::DISCONNECTING)
+			continue;
+		if (p.awaitingSnapshot || p.lateSyncChecks >= 0)
+			return true;
+	}
+
+	return false;
+}
+
+void CGameServer::EndLateSync(GameParticipant& p, const char* how)
+{
+	if (p.lateSyncChecks < 0)
+		return;
+
+	Message(spring::format("[SnapshotJoin] %s %s: %d frame(s) after the snapshot verified in sync%s", p.name.c_str(), how, p.lateSyncChecks,
+		(p.lateSyncMisses > 0) ? spring::format(" (%d without a kept checksum)", p.lateSyncMisses).c_str() : ""), false);
+
+	p.lateSyncChecks = -1;
+	p.lateSyncMisses = 0;
+}
+
+#ifdef SYNCCHECK
+void CGameServer::LateSyncError(GameParticipant& p, int frameNum, unsigned checkSum, unsigned correctChecksum)
+{
+	// the same consequences as a desync found by CheckSync, for one client;
+	// a diverged client answers every frame with another checksum, so the
+	// report is throttled like CheckSync's
+	p.desynced = true;
+
+	if (syncErrorFrame != 0 && (serverFrameNum - syncErrorFrame) <= static_cast<int>(SYNCCHECK_MSG_TIMEOUT))
+		return;
+
+	syncErrorFrame = serverFrameNum;
+	desyncHasOccurred = true;
+
+	#ifndef DEDICATED
+	spring::exitCode = spring::EXIT_CODE_DESYNC;
+	#endif
+
+	const std::string msg = spring::format(SyncError, p.name.c_str(), frameNum, checkSum, correctChecksum);
+
+	LOG_L(L_ERROR, "%s", msg.c_str());
+	Message(msg + " (catching up from a snapshot)");
+
+	if (p.spectator)
+		PrivateMessage(p.id, msg);
+}
+#endif
+
 void CGameServer::CheckSync()
 {
 #ifdef SYNCCHECK
@@ -682,15 +737,25 @@ void CGameServer::CheckSync()
 		desyncGroups.clear();
 		desyncSpecs.clear();
 
+		bool keepReference = false;
+
 		for (GameParticipant& p: players) {
 			if (p.clientLink == nullptr || p.myState == GameParticipant::State::DISCONNECTING)
 				continue;
 
 			// frames covered by the snapshot a client joined from are never simulated by it
-			if (p.awaitingSnapshot || outstandingSyncFrame < p.syncCheckStartFrame)
+			if (outstandingSyncFrame < p.syncCheckStartFrame)
 				continue;
 
 			const auto pChecksumIt = p.syncResponse.find(outstandingSyncFrame);
+
+			// a client waiting for or catching up from a snapshot simulates
+			// this frame later: the agreed checksum is kept to compare its
+			// response with when it arrives (see NETMSG_SYNCRESPONSE)
+			if ((p.awaitingSnapshot || p.lateSyncChecks >= 0) && pChecksumIt == p.syncResponse.end()) {
+				keepReference = true;
+				continue;
+			}
 
 			if (pChecksumIt == p.syncResponse.end()) {
 				if (outstandingSyncFrame >= (serverFrameNum - static_cast<int>(SYNCCHECK_TIMEOUT)))
@@ -778,6 +843,9 @@ void CGameServer::CheckSync()
 
 		// Remove complete sets (for which all player's checksums have been received).
 		if (completeResponseSet) {
+			if (keepReference && haveCorrectChecksum)
+				lateSyncReference[outstandingSyncFrame] = correctChecksum;
+
 			for (GameParticipant& p: players) {
 				if (p.myState < GameParticipant::DISCONNECTING)
 					p.syncResponse.erase(outstandingSyncFrame);
@@ -788,6 +856,22 @@ void CGameServer::CheckSync()
 		}
 
 		++outstandingSyncFrameIt;
+	}
+
+	// kept checksums every connected client has reported past (they are only
+	// added while a client waits for or catches up from a snapshot, so the
+	// map drains once that client has caught up)
+	if (!lateSyncReference.empty()) {
+		int firstNeeded = std::numeric_limits<int>::max();
+
+		for (const GameParticipant& p: players) {
+			if (p.clientLink == nullptr || p.myState == GameParticipant::State::DISCONNECTING)
+				continue;
+
+			firstNeeded = std::min(firstNeeded, p.lastSyncResponseFrame + 1);
+		}
+
+		lateSyncReference.erase(lateSyncReference.begin(), lateSyncReference.lower_bound(firstNeeded));
 	}
 
 #else
@@ -1123,6 +1207,7 @@ void CGameServer::ProcessPacket(const unsigned playerNum, std::shared_ptr<const 
 			Message(spring::format(PlayerLeft, players[a].GetType(), players[a].name.c_str(), " normal quit"));
 			Broadcast(CBaseNetProtocol::Get().SendPlayerLeft(a, 1));
 			players[a].Kill("[GameServer] user exited", true);
+			EndLateSync(players[a], "left while catching up");
 			snapshotJoin->PlayerLeft(a);
 			if (hostif != nullptr)
 				hostif->SendPlayerLeft(a, 1);
@@ -1384,12 +1469,40 @@ void CGameServer::ProcessPacket(const unsigned playerNum, std::shared_ptr<const 
 			assert(a == playerNum);
 			GameParticipant& p = players[a];
 
-			if (outstandingSyncFrames.find(frameNum) != outstandingSyncFrames.end())
+			p.lastSyncResponseFrame = std::max(p.lastSyncResponseFrame, frameNum);
+
+			if (outstandingSyncFrames.find(frameNum) != outstandingSyncFrames.end()) {
 				p.syncResponse[frameNum] = checkSum;
+			} else if (frameNum >= p.syncCheckStartFrame) {
+				// a frame the others have agreed on already, kept for a client
+				// catching up from a snapshot (see CheckSync)
+				const auto it = lateSyncReference.find(frameNum);
+
+				if (it != lateSyncReference.end()) {
+					if (checkSum != it->second) {
+						LateSyncError(p, frameNum, checkSum, it->second);
+					} else if (p.lateSyncChecks >= 0) {
+						p.lateSyncChecks++;
+					}
+				} else if (p.lateSyncChecks >= 0) {
+					p.lateSyncMisses++;
+				} else if (AnyoneCatchingUp()) {
+					// a frame that timed out without an agreed checksum (its
+					// clients lagged, e.g. the sources after writing the snapshot):
+					// the first late report stands in for it
+					lateSyncReference[frameNum] = checkSum;
+				}
+			}
 
 			// update player's ping (if !defined(SYNCCHECK) this is done in NETMSG_KEYFRAME)
 			if (frameNum <= serverFrameNum && frameNum > p.lastFrameResponse)
 				p.lastFrameResponse = frameNum;
+
+			// a client catching up from a snapshot has reached the live frames:
+			// awaited (and checked) like everyone else from here on; checksums
+			// kept for frames it has not reported yet stay until it has
+			if (p.lateSyncChecks >= 0 && frameNum >= (serverFrameNum - static_cast<int>(LATE_SYNC_LIVE_FRAMES)))
+				EndLateSync(p, "caught up");
 
 			// send player <a>'s sync-response back to everybody
 			// (the only purpose of this is to allow a client to
@@ -2040,6 +2153,7 @@ void CGameServer::ServerReadNet()
 			Broadcast(CBaseNetProtocol::Get().SendPlayerLeft(player.id, 0));
 
 			player.Kill("User timeout");
+			EndLateSync(player, "left while catching up");
 			snapshotJoin->PlayerLeft(player.id);
 
 			if (hostif != nullptr)
@@ -2118,7 +2232,7 @@ void CGameServer::ServerReadNet()
 					break;
 
 				// snapshot transfers are bulk data requested by the server itself, not spam (from anyone else they are)
-				const bool snapshotPacket = (aiPacket->length > 0 && (aiPacket->data[0] == NETMSG_SNAPSHOT_DATA || aiPacket->data[0] == NETMSG_SNAPSHOT_HASH) && snapshotJoin->IsParticipant(player.id));
+				const bool snapshotPacket = (aiPacket->length > 0 && (aiPacket->data[0] == NETMSG_SNAPSHOT_DATA || aiPacket->data[0] == NETMSG_SNAPSHOT_HASH) && snapshotJoin->AcceptsSnapshotPacket(player.id, aiPacket->data[0]));
 				const bool droppablePacket = !snapshotPacket && (aiPacket->length <= 0 || (aiPacket->data[0] != NETMSG_SYNCRESPONSE && aiPacket->data[0] != NETMSG_KEYFRAME));
 
 				if (forcedDropPacket && droppablePacket) {
@@ -2851,6 +2965,7 @@ void CGameServer::KickPlayer(int playerNum)
 	Broadcast(CBaseNetProtocol::Get().SendPlayerLeft(playerNum, 2));
 
 	players[playerNum].Kill("Kicked from the battle", true);
+	EndLateSync(players[playerNum], "left while catching up");
 	snapshotJoin->PlayerLeft(playerNum);
 
 	if (hostif != nullptr)
@@ -2927,8 +3042,13 @@ bool CGameServer::CheckPlayerPassword(const int playerNum, const std::string& pw
 	const auto& opts = players[playerNum].GetAllValues();
 	const auto it = opts.find("password");
 
-	if (it == opts.end() || it->second.empty())
+	// no password in the start script: any password connects, none can
+	// authenticate the replacement of a running connection
+	if (it == opts.end())
 		return !requirePassword;
+	// an empty one: only the empty password connects (as before)
+	if (it->second.empty())
+		return (!requirePassword && pw.empty());
 
 	return (it->second == pw);
 }
@@ -3061,10 +3181,12 @@ unsigned CGameServer::BindConnection(
 			if (!demoReader && allowSpecJoin)
 				clientName = "~" + clientName;
 
-			if (demoReader || allowSpecJoin)
+			if (demoReader || allowSpecJoin) {
 				AddAdditionalUser(clientName, clientPassword);
-			else
+				players[newPlayerNumber].unauthenticated = (!demoReader && allowSpecJoin);
+			} else {
 				errMsg = "User name not authorized to connect";
+			}
 		}
 
 		// check user's password; disabled for local host
@@ -3098,6 +3220,7 @@ unsigned CGameServer::BindConnection(
 		// prevent sending a quit message since that might kill the new connection
 		newPlayer.clientLink.reset();
 		newPlayer.Kill("Terminating connection");
+		EndLateSync(newPlayer, "left while catching up");
 		snapshotJoin->PlayerLeft(newPlayerNumber);
 
 		if (hostif != nullptr)

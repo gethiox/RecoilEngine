@@ -166,6 +166,14 @@ private:
 	void Update();
 	void ProcessPacket(const unsigned playerNum, std::shared_ptr<const netcode::RawPacket> packet);
 	void CheckSync();
+	/// a client waits for or catches up from a snapshot (its frames are checked late)
+	bool AnyoneCatchingUp() const;
+	/// a client that was catching up from a snapshot reached the live frames or left: report, stop
+	void EndLateSync(GameParticipant& p, const char* how);
+#ifdef SYNCCHECK
+	/// a client catching up from a snapshot answered an evaluated frame with another checksum
+	void LateSyncError(GameParticipant& p, int frameNum, unsigned checkSum, unsigned correctChecksum);
+#endif
 	void HandleConnectionAttempts();
 	bool ValidateAICommandTeam(uint8_t aiID, int cmdID, const netcode::RawPacket& packet, const GameParticipant& player);
 	void ServerReadNet();
@@ -235,6 +243,9 @@ private:
 	/////////////////// sync stuff ///////////////////
 #ifdef SYNCCHECK
 	std::set<int> outstandingSyncFrames;
+	/// agreed checksums of evaluated frames, kept while a client that joined
+	/// from a snapshot still has to simulate them (frame -> checksum)
+	std::map<int, unsigned> lateSyncReference;
 #endif
 
 	/////////////////// game status variables ///////////////////

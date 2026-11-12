@@ -339,7 +339,7 @@ def main():
 	shutil.copy(os.path.join(args.data_dir, "infolog.txt"), os.path.join(sd, "infolog.txt"))
 
 	for line in server_out.splitlines():
-		if "[SnapshotJoin]" in line or "Sync error" in line or "sync" in line.lower() and "error" in line.lower():
+		if "[SnapshotJoin]" in line or "Sync error" in line or ("sync" in line.lower() and "error" in line.lower()):
 			log("server: " + line.split("] ", 1)[-1][:160])
 
 	if args.kill:
@@ -430,6 +430,15 @@ def main():
 	if "Sync error" in server_out:
 		log("FAIL server reported a sync error")
 		ok = False
+
+	# the server compares the joiner's checksums of the frames right after the
+	# snapshot (evaluated before it reported them) against the agreed ones
+	if not args.no_snapshot:
+		verified = [int(m) for m in re.findall(r"(?:caught up|left while catching up): (\d+) frame\(s\) after the snapshot verified in sync", server_out)]
+		expected = 2 if args.rejoin_twice else 1
+		good = (len(verified) == expected and all(n > 0 for n in verified))
+		log(("PASS" if good else "FAIL") + " server verified the joiner's frames after the snapshot (%s)" % ", ".join(map(str, verified)))
+		ok &= good
 
 	return 0 if ok else 1
 
