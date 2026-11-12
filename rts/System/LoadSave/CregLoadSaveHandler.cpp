@@ -360,6 +360,7 @@ void CLuaStateCollector::Read(const CSplitLuaHandle* handle) {
 		creg::MakeCanonicalLuaState(L, L_GC);
 	} else {
 		lua_gc(L_GC, LUA_GCCOLLECT, 0);
+		lua_gc(L_GC, LUA_GCSTOP, 0); // see MakeCanonicalLuaState
 	}
 }
 

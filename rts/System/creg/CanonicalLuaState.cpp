@@ -166,24 +166,30 @@ bool KeyLess(const TValue* a, const TValue* b)
  */
 bool HasHistoryDependentLayout(global_State* g, const Table* t)
 {
+	// a weak table loses entries whenever the collector runs: its array and
+	// hash sizes and its node layout are a function of the collector's
+	// timing (this includes weak tables used as arrays)
+	if (gfasttm(g, t->metatable, TM_MODE) != NULL)
+		return true;
+
 	const int size = sizenode(t);
 
 	// empty hash part (also the shared dummy node)
 	if (t->lsizenode == 0 && ttisnil(gval(gnode(t, 0))) && ttisnil(gkey(gnode(t, 0))))
 		return false;
 
-	if (gfasttm(g, t->metatable, TM_MODE) != NULL)
-		return true;
-
+	// light userdata keys hash by address, which differs between processes.
+	// Other object keys hash by creation id: a non-weak table keyed by them
+	// has the same layout on every client (same history), so it is stored
+	// as it is; rebuilding it would change its iteration order on the
+	// sources only.
 	for (int i = 0; i < size; i++) {
 		const Node* n = gnode(t, i);
 
 		if (ttisnil(gval(n)))
 			continue;
 
-		const TValue* k = key2tval(n);
-
-		if ((iscollectable(k) && ttype(k) != LUA_TSTRING) || ttype(k) == LUA_TLIGHTUSERDATA)
+		if (ttype(key2tval(n)) == LUA_TLIGHTUSERDATA)
 			return true;
 	}
 
@@ -415,6 +421,10 @@ void MakeCanonicalLuaState(lua_State* L, lua_State* L_GC)
 	// the collector's estimates a function of the (now canonical) heap
 	CanonicalSizes(L_GC);
 	lua_gc(L_GC, LUA_GCCOLLECT, 0);
+
+	// a full collection re-arms the collector; the engine only ever runs it
+	// in its own batches (the threshold stays at the maximum otherwise)
+	lua_gc(L_GC, LUA_GCSTOP, 0);
 
 	CanonicalWhite(G(L_GC));
 	SortStringTable(G(L_GC));
