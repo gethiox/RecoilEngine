@@ -545,7 +545,7 @@ static int str_match (lua_State *L) {
 }
 
 
-static int gmatch_aux (lua_State *L) {
+int gmatch_aux (lua_State *L) { /* SPRING: not static, saved games register it */
   MatchState ms;
   size_t ls;
   const char *s = lua_tolstring(L, lua_upvalueindex(1), &ls);

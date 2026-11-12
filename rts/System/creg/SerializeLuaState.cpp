@@ -14,6 +14,8 @@
 #include "System/UnorderedMap.hpp"
 #include "System/StringUtil.h"
 #include "System/Log/ILog.h"
+#include "System/Exceptions.h"
+#include "System/SpringFormat.h"
 #include <deque>
 
 struct creg_lua_State;
@@ -393,6 +395,12 @@ union creg_GCObject {
 
 // Specialization because we have to figure the real class and not
 // serialize GCObject* pointers.
+// C closures that Lua code creates at run time (and may hold on to across
+// frames): not reachable from the globals or the registry, so the automatic
+// registration cannot find them
+int gmatch_aux(lua_State* L);   // lstrlib.cpp, string.gmatch
+int luaB_auxwrap(lua_State* L); // lbaselib.cpp, coroutine.wrap
+
 namespace creg {
 template<>
 class ObjectPointerType<creg_GCObject> : public IType
@@ -656,13 +664,25 @@ CR_REG_METADATA(creg_LG, (
 ))
 
 
+// the Lua allocator refuses allocations beyond the configured limit: a load
+// that hits it must fail instead of writing through a null pointer
+static void* AllocOrThrow(size_t size)
+{
+	void* p = luaContext.alloc(size);
+
+	if (p == nullptr && size > 0)
+		throw content_error("[creg::SerializeLuaState] out of Lua memory while loading (LuaAllocLimit)");
+
+	return p;
+}
+
 template<typename T, typename C>
 inline void SerializeCVector(creg::ISerializer* s, T** vecPtr, C count)
 {
 	std::unique_ptr<creg::IType> elemType = creg::DeduceType<T>::Get();
 	T* vec;
 	if (!(s->IsWriting())) {
-		vec = (T*) luaContext.alloc(count * sizeof(T));
+		vec = (T*) AllocOrThrow(count * sizeof(T));
 		*vecPtr = vec;
 	} else {
 		vec = *vecPtr;
@@ -872,20 +892,24 @@ void creg_CClosure::Serialize(creg::ISerializer* s)
 
 	creg::StringType sType;
 	if (s->IsWriting()) {
-		if (funcToName.find(f) == funcToName.end()) {
-			LOG_L(L_ERROR, "Function with address 0x%p not found during serialization", f);
-		}
-		assert(funcToName.find(f) != funcToName.end());
-		std::string name = funcToName[f];
+		const auto it = funcToName.find(f);
+
+		// a name-less function could not be restored: refuse to write such a
+		// state instead of producing one that crashes on load
+		if (it == funcToName.end())
+			throw content_error(spring::format("[creg::CClosure] C function at address %p is not registered", (void*) f));
+
+		std::string name = it->second;
 		sType.Serialize(s, &name);
 	} else {
 		std::string name;
 		sType.Serialize(s, &name);
-		if (nameToFunc.find(name) == nameToFunc.end()) {
-			LOG_L(L_ERROR, "Function with name %s was not found during deserialization", name.c_str());
-		}
-		assert(nameToFunc.find(name) != nameToFunc.end());
-		f = nameToFunc[name];
+		const auto it = nameToFunc.find(name);
+
+		if (it == nameToFunc.end())
+			throw content_error("[creg::CClosure] C function \"" + name + "\" is not registered");
+
+		f = it->second;
 	}
 }
 
@@ -978,11 +1002,11 @@ void creg_lua_State::Serialize(creg::ISerializer* s)
 	}
 
 	if (!s->IsWriting()) {
-		base_ci = (CallInfo *) luaContext.alloc(size_ci * sizeof(*base_ci));
+		base_ci = (CallInfo *) AllocOrThrow(size_ci * sizeof(*base_ci));
 		ci = base_ci + ci_offset;
 		end_ci = base_ci + size_ci - 1;
 
-		stack = (StkId) luaContext.alloc(stacksize * sizeof(*stack));
+		stack = (StkId) AllocOrThrow(stacksize * sizeof(*stack));
 		base = stack + base_offset;
 		top = stack + top_offset;
 		stack_last = stack + stacksize - EXTRA_STACK - 1;
@@ -1112,7 +1136,7 @@ void SerializeLuaState(creg::ISerializer* s, lua_State** L)
 		clg->g.uvhead.v = nullptr;
 	} else {
 		assert(*L == nullptr);
-		clg = (creg_LG*) luaContext.alloc(sizeof(creg_LG));
+		clg = (creg_LG*) AllocOrThrow(sizeof(creg_LG));
 		*L = (lua_State*) &(clg->l);
 		luaContext.SetMainthread(*L);
 	}
@@ -1197,6 +1221,9 @@ void AutoRegisterCFunctions(const std::string& handle, lua_State* L)
 	lua_getregistry(L);
 	RecursiveAutoRegisterTable(handle, L, 0);
 	lua_pop(L, 1);
+
+	RegisterCFunction("gmatch_aux", ::gmatch_aux);
+	RegisterCFunction("luaB_auxwrap", ::luaB_auxwrap);
 }
 
 void UnregisterAllCFunctions() {
