@@ -281,7 +281,9 @@ void CMissileProjectile::Update()
 			);
 
 			numParts = 0;
-			useAirLos = smokeTrail->useAirLos;
+			// synced, from synced data only (the trail's geometry is local: it
+			// restarts at the load position on a client that loaded the game)
+			useAirLos = ((pos.y - CGround::GetApproximateHeight(pos.x, pos.z)) > 10.0f);
 		}
 	}
 

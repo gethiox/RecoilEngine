@@ -339,7 +339,8 @@ void CStarburstProjectile::UpdateSmokeTrail()
 	);
 
 	numParts = 0;
-	useAirLos = smokeTrail->useAirLos;
+	// synced, from synced data only (see CMissileProjectile::Update)
+	useAirLos = ((pos.y - CGround::GetApproximateHeight(pos.x, pos.z)) > 10.0f);
 }
 
 inline float CStarburstProjectile::GetSmokeSize() const

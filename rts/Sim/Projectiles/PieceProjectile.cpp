@@ -331,6 +331,12 @@ void CPieceProjectile::Update()
 		fireTrailPoints[0].size = 1 + guRNG.NextFloat();
 	}
 
+	// synced: whether the piece is seen through air LOS, re-evaluated at the
+	// smoke period from synced data only (the trail that used to provide it
+	// exists on clients with particle budget left, with a local geometry)
+	if ((explFlags & PF_Smoke) && (age % NUM_TRAIL_PARTS) == 0)
+		useAirLos = ((pos.y - CGround::GetApproximateHeight(pos.x, pos.z)) > 10.0f);
+
 	if (drawFlags & PF_Smoke) {
 		if (smokeTrail) {
 			smokeTrail->UpdateEndPos(pos, dir);
@@ -351,8 +357,6 @@ void CPieceProjectile::Update()
 				SMOKE_COLOR,
 				projectileDrawer->smoketrailtex
 			);
-
-			useAirLos = smokeTrail->useAirLos;
 		}
 	}
 }
