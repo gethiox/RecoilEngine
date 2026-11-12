@@ -9,6 +9,7 @@
 #include "LuaGaia.h"
 #include "LuaRules.h"
 #include "LuaUI.h"
+#include "System/creg/SerializeLuaState.h"
 
 
 enum {
@@ -132,6 +133,12 @@ bool LuaInterCall::PushEntriesSynced(lua_State* L)
 {
 	PushCallHandler(L, LUA_GAIA,  "LuaGaia");
 	PushCallHandler(L, LUA_RULES, "LuaRules");
+
+	// Script.LuaRules.X hands out closures of HandleXCall at run time; gadgets
+	// keep them, so saved games have to know the function by name (the
+	// automatic registration only sees what the globals and the registry
+	// reach at handle init)
+	creg::RegisterCFunction("HandleXCall", HandleXCall);
 	return true;
 }
 

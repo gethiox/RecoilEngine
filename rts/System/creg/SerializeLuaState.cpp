@@ -402,6 +402,7 @@ union creg_GCObject {
 // registration cannot find them
 int gmatch_aux(lua_State* L);   // lstrlib.cpp, string.gmatch
 int luaB_auxwrap(lua_State* L); // lbaselib.cpp, coroutine.wrap
+// (LuaInterCall.cpp registers the Script.LuaRules.X / Script.LuaGaia.X closures' function itself)
 
 namespace creg {
 template<>
@@ -1069,7 +1070,13 @@ void creg_lua_State::Serialize(creg::ISerializer* s)
 	ptrdiff_t top_offset;
 	ptrdiff_t savedpc_offset;
 	if (s->IsWriting()) {
-		ci_offset = ci - base_ci;
+		// a coroutine that died with an error keeps the frame the error was
+		// raised in (lua_resume does not unwind); it can never run again, so
+		// it is stored without frames (the function slot below a base frame
+		// is not a closure)
+		const bool deadWithError = (status != 0 && status != LUA_YIELD);
+
+		ci_offset = deadWithError ? 0 : (ci - base_ci);
 		base_offset = base - stack;
 		top_offset = top - stack;
 		assert(end_ci == base_ci + size_ci - 1);
@@ -1158,6 +1165,13 @@ void creg_lua_State::Serialize(creg::ISerializer* s)
 
 void creg_lua_State::PostLoad()
 {
+	// not stored: no error handler is active outside of a call, no hook is
+	// set (Lua reads neither for a loaded, not running thread, but an
+	// unprotected error would longjmp to a garbage address)
+	errorJmp = nullptr;
+	hook = nullptr;
+	setnilvalue(&env);
+
 	if (base_ci == ci)
 		return;
 
@@ -1221,9 +1235,13 @@ void SerializeLuaState(creg::ISerializer* s, lua_State** L)
 	if (s->IsWriting()) {
 		assert(*L != nullptr);
 		clg = (creg_LG*) *L;
-		// a garbage pointer that needs fixing
+		// a garbage pointer that needs fixing; the list head's header bytes
+		// are never initialized by Lua (heap garbage differs per process)
 		clg->g.uvhead.next = nullptr;
 		clg->g.uvhead.v = nullptr;
+		clg->g.uvhead.tt = LUA_TUPVAL;
+		clg->g.uvhead.marked = 0;
+		clg->g.uvhead.hashid = 0;
 	} else {
 		assert(*L == nullptr);
 		clg = (creg_LG*) AllocOrThrow(sizeof(creg_LG));
