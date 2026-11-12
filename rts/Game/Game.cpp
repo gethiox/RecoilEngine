@@ -1746,10 +1746,21 @@ void CGame::StartPlayingFromSnapshot()
 	if (!spectator) {
 		gu->myPlayingTeam = gu->myTeam;
 		gu->myPlayingAllyTeam = gu->myAllyTeam;
+	} else {
+		// what CPlayer::StartSpectating does for the local player
+		selectedUnitsHandler.ClearSelected();
+
+		if (readMap != nullptr)
+			readMap->BecomeSpectator();
+
+		unitTracker.Disable();
 	}
 
 	GameSetupDrawer::Disable();
 	CLuaUI::UpdateTeams();
+
+	// unsynced Lua was initialized with the start script's identity
+	eventHandler.PlayerChanged(gu->myPlayerNum);
 }
 
 static const char* const tracingSimFrameName = "SimFrame";

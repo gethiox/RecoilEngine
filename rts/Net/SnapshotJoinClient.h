@@ -92,6 +92,7 @@ private:
 	int32_t joinMarkerFrame = -1;
 
 	enum class JoinState { NONE, LOADING, PLAYING } joinState = JoinState::NONE;
+	bool gameIDAnnounced = false;
 
 	struct History {
 		uint32_t expectedSize = 0;

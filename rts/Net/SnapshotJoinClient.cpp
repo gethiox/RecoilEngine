@@ -68,6 +68,7 @@ void CSnapshotJoinClient::Reset()
 	joinRequestID = 0;
 	joinMarkerFrame = -1;
 	joinState = JoinState::NONE;
+	gameIDAnnounced = false;
 	history = {};
 }
 
@@ -193,6 +194,16 @@ void CSnapshotJoinClient::Start(CGame* game)
 
 	joinState = JoinState::PLAYING;
 
+	// the game id is part of the loaded state: the demo gets it now (the
+	// history, with the original packet, may arrive minutes later) and so do
+	// the unsynced handlers, which started fresh (the synced ones reacted to
+	// it at game start, their effects are part of the snapshot)
+	if (CDemoRecorder* record = clientNet->GetDemoRecorder(); record != nullptr)
+		record->SetGameID(game->gameID);
+
+	eventHandler.GameID(game->gameID, sizeof(game->gameID), true);
+	gameIDAnnounced = true;
+
 	// the game started long ago; everything synced about that is part of the snapshot
 	game->StartPlayingFromSnapshot();
 }
@@ -300,11 +311,12 @@ void CSnapshotJoinClient::AddHistoryPacket(const uint8_t* data, uint32_t length,
 			if (CDemoRecorder* record = clientNet->GetDemoRecorder(); record != nullptr)
 				record->SetGameID(&data[1]);
 
-			// synced handlers reacted to the id at game start (e.g. BAR reseeds
-			// the synced RNG and exposes the id as a rules param), their effects
-			// are part of the snapshot; unsynced handlers started fresh and get it
-			memcpy(game->gameID, &data[1], sizeof(game->gameID));
-			eventHandler.GameID(game->gameID, sizeof(game->gameID), true);
+			// normally announced from the loaded state already (see Start)
+			if (!gameIDAnnounced) {
+				memcpy(game->gameID, &data[1], sizeof(game->gameID));
+				eventHandler.GameID(game->gameID, sizeof(game->gameID), true);
+				gameIDAnnounced = true;
+			}
 		} break;
 
 		default: {
